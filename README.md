@@ -1,7 +1,7 @@
 # Folder duplicates finder
 
-This yool can help you to optimize your decades old back-ups or find latest versions of the folders within your back-ups.
-Imagine you took photos and never sorted them and you have multiples copies of the same photos from the same day in multiple places. How to find all the folders with the same data?
+This tool can help you to optimize your decades old back-ups or find latest versions of the folders within your back-ups.
+Imagine you took photos and never sorted them, but moved them around, replaced back-up drives and now you have multiples copies of the same photos from the same day in multiple places. How to find all the folders with the same data, not just individual files?
 
 I ran into the problem of huge unsorted back-ups and no tool on the market that I could possibly find could help me with that, it either takes too long to scan the files or too much of my time to crawl through the files.
 It supports filtering folders by the minimum size and minimum similarity level. It can show content of the folder duplicates with only the same files or including the unique files.
