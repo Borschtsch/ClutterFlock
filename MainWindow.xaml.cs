@@ -55,6 +55,15 @@ namespace FolderDupFinder
       private int _totalFoldersToScan = 0;
       private string _scanStatus = "";
 
+      // Progress tracking for file comparison phase
+      private int _currentProgress = 0;
+      private int _maxProgress = 1;
+      private bool _isFileComparisonMode = false;
+
+      // Cancellation support
+      private CancellationTokenSource _cancellationTokenSource;
+      private bool _operationInProgress = false;
+
       // Controls parallelism for folder/file processing
       private static readonly int MaxParallelism = Math.Max(1, Environment.ProcessorCount - 1);
 
@@ -64,26 +73,35 @@ namespace FolderDupFinder
       // Observable collection for binding to ListView
       private ObservableCollection<FolderMatch> _folderMatchCollection = new();
 
-      // ViewModels and UI state
-      public class FileMatchViewModel
+      // Enhanced ViewModels and UI state for the new file details panel
+      public class FileDetailViewModel
       {
-         public string FileName { get; set; } = "";
-         public string SizeDisplay { get; set; } = "";
-         public long SizeBytes { get; set; }
-         public string Affinity { get; set; } = ""; // "Left", "Right", "Both"
-         public string PathA { get; set; } = ""; // For tooltip only
-         public string PathB { get; set; } = ""; // For tooltip only
+          public string FileName { get; set; } = "";
+          public string SizeDisplay { get; set; } = "";
+          public long SizeBytes { get; set; }
+          public string Location { get; set; } = ""; // "Left", "Right", "Both" - renamed from Source/Affinity
+          public string FullPathLeft { get; set; } = ""; // Full path in left folder
+          public string FullPathRight { get; set; } = ""; // Full path in right folder
+          public bool IsUnique { get; set; } // True for unique files, false for duplicates
+          
+          public string TooltipText => IsUnique ? 
+              (string.IsNullOrEmpty(FullPathLeft) ? FullPathRight : FullPathLeft) :
+              $"Left: {FullPathLeft}\nRight: {FullPathRight}";
       }
 
-      private List<FileMatchViewModel> _currentFileViewModels = new();
-      private List<FileMatchViewModel> _currentFileViewModelsFiltered = new();
-      private string _currentLeft = "";
-      private string _currentRight = "";
-      private List<FileMatch> _currentFiles = new();
-      private bool _fileListSortBySizeDesc = false;
+      private ObservableCollection<FileDetailViewModel> _fileDetailCollection = new();
+      private List<FileDetailViewModel> _allFileDetails = new(); // Includes unique files
+      private bool _showUniqueFiles = false;
+
+      // Multi-sorting state for file details ListView
+      private readonly List<(string Property, ListSortDirection Direction, int Priority)> _filesSortOrder = new();
 
       // Track multi-sort state for ListView columns
-      private readonly List<(string Property, ListSortDirection Direction)> _sortOrder = new();
+      private readonly List<(string Property, ListSortDirection Direction, int Priority)> _sortOrder = new();
+      private const int MaxSortLevels = 3; // Maximum number of sort levels to show
+
+      // Add this field to track subfolder counts for each scan folder
+      private readonly Dictionary<string, int> _scanFolderSubfolderCounts = new();
 
       public MainWindow()
       {
@@ -94,8 +112,16 @@ namespace FolderDupFinder
          {
             Dispatcher.Invoke(() =>
             {
-               mainProgressBar.Maximum = _totalFoldersToScan;
-               mainProgressBar.Value = _foldersScanned;
+               if (_isFileComparisonMode)
+               {
+                  mainProgressBar.Maximum = _maxProgress;
+                  mainProgressBar.Value = _currentProgress;
+               }
+               else
+               {
+                  mainProgressBar.Maximum = _totalFoldersToScan;
+                  mainProgressBar.Value = _foldersScanned;
+               }
                statusLabel.Text = _scanStatus;
             });
          };
@@ -109,131 +135,356 @@ namespace FolderDupFinder
       {
          bool hasFolders = _scanFolders.Count > 0;
          bool hasSelection = listBoxFolders.SelectedItem != null;
-         bool analysisActive = _uiUpdateTimer.Enabled;
+         bool analysisActive = _operationInProgress;
+         
          if (btnAddFolder != null) btnAddFolder.IsEnabled = !analysisActive;
          if (btnRemoveFolder != null) btnRemoveFolder.IsEnabled = hasSelection && !analysisActive;
          if (btnRunComparison != null) btnRunComparison.IsEnabled = hasFolders && !analysisActive;
          if (btnSaveProject != null) btnSaveProject.IsEnabled = hasFolders && !analysisActive;
          if (btnLoadProject != null) btnLoadProject.IsEnabled = !analysisActive;
+         if (btnCancel != null) 
+         {
+             btnCancel.IsEnabled = analysisActive;
+             btnCancel.Visibility = analysisActive ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
+         }
       }
 
       // ═════════════════════════════ BUTTONS ═════════════════════════════
       // Handler for Add Folder button: opens folder dialog and adds folder to scan list
-      private void AddFolder_Click(object sender, System.Windows.RoutedEventArgs e)
+      private async void AddFolder_Click(object sender, System.Windows.RoutedEventArgs e)
       {
-         var dlg = new System.Windows.Forms.FolderBrowserDialog { Description = "Add folder to scan" };
-         if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
-         string path = dlg.SelectedPath;
-         if (_scanFolders.Contains(path))
-         {
-            System.Windows.MessageBox.Show("Folder already in list.");
-            return;
-         }
-         _scanFolders.Add(path);
-         listBoxFolders.Items.Add(path);
-         // Scan folder in background immediately
-         Task.Run(() => ScanFolder(path));
-         Dispatcher.Invoke(UpdateButtonStates);
+          var dlg = new System.Windows.Forms.FolderBrowserDialog { Description = "Add folder to scan" };
+          if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
+          string path = dlg.SelectedPath;
+          if (_scanFolders.Contains(path))
+          {
+              System.Windows.MessageBox.Show("Folder already in list.");
+              return;
+          }
+
+          // Set up cancellation
+          _cancellationTokenSource = new CancellationTokenSource();
+          _operationInProgress = true;
+          var cancellationToken = _cancellationTokenSource.Token;
+          
+          btnAddFolder.IsEnabled = false;
+          statusLabel.Text = "Counting subfolders...";
+          mainProgressBar.IsIndeterminate = true;
+          UpdateButtonStates();
+
+          try
+          {
+              // Count subfolders asynchronously
+              await Task.Run(() =>
+              {
+                  var subfolders = new List<string>();
+                  var stack = new Stack<string>();
+                  stack.Push(path);
+
+                  while (stack.Count > 0 && !cancellationToken.IsCancellationRequested)
+                  {
+                      var current = stack.Pop();
+                      subfolders.Add(current);
+
+                      try
+                      {
+                          foreach (var dir in Directory.GetDirectories(current))
+                          {
+                              if (cancellationToken.IsCancellationRequested) break;
+                              stack.Push(dir);
+                          }
+
+                          if (subfolders.Count % 500 == 0) // Reduced frequency for better performance
+                          {
+                              Dispatcher.Invoke(() => statusLabel.Text = $"Counting subfolders: {subfolders.Count}...");
+                          }
+                      }
+                      catch (UnauthorizedAccessException) { continue; }
+                      catch (DirectoryNotFoundException) { continue; }
+                  }
+
+                  if (cancellationToken.IsCancellationRequested)
+                  {
+                      Dispatcher.Invoke(() => statusLabel.Text = "Operation cancelled.");
+                      return;
+                  }
+
+                  Dispatcher.Invoke(() =>
+                  {
+                      _scanFolders.Add(path);
+                      listBoxFolders.Items.Add(path);
+                      _scanFolderSubfolderCounts[path] = subfolders.Count;
+                      _totalFoldersToScan = _scanFolderSubfolderCounts.Values.Sum();
+                      mainProgressBar.Maximum = _totalFoldersToScan;
+                      mainProgressBar.IsIndeterminate = false;
+                      statusLabel.Text = $"Found {subfolders.Count} subfolders. Starting scan...";
+                  });
+
+                  // Filter out folders that are already cached
+                  var foldersToScan = subfolders.Where(sf => !_folderFileCache.ContainsKey(sf)).ToList();
+                  
+                  if (foldersToScan.Count == 0)
+                  {
+                      // All folders already scanned
+                      Dispatcher.Invoke(() =>
+                      {
+                          statusLabel.Text = $"All folders already scanned. Progress: {_foldersScanned}/{_totalFoldersToScan}";
+                          mainProgressBar.Value = _foldersScanned;
+                          UpdateButtonStates();
+                      });
+                      return;
+                  }
+
+                  // Now scan only the folders that haven't been scanned yet
+                  _isFileComparisonMode = false; // Ensure we're in folder scanning mode
+                  _uiUpdateTimer.Start();
+
+                  Parallel.ForEach(foldersToScan, new ParallelOptions { 
+                      MaxDegreeOfParallelism = MaxParallelism, 
+                      CancellationToken = cancellationToken 
+                  }, subfolder =>
+                  {
+                      if (cancellationToken.IsCancellationRequested) return;
+                      
+                      try
+                      {
+                          var files = Directory.GetFiles(subfolder, "*.*", SearchOption.TopDirectoryOnly);
+                          _folderFileCache[subfolder] = files.ToList();
+                          
+                          var info = new FolderInfo 
+                          { 
+                              Files = files.ToList(), 
+                              TotalSize = files.Sum(f => new FileInfo(f).Length) 
+                          };
+                          _folderInfoCache[subfolder] = info;
+
+                          // Increment global folders scanned and update progress bar
+                          int scanned = Interlocked.Increment(ref _foldersScanned);
+                          if (scanned % 50 == 0 || scanned == _totalFoldersToScan)
+                          {
+                              _scanStatus = $"Scanning: {scanned}/{_totalFoldersToScan} folders...";
+                          }
+                      }
+                      catch (OperationCanceledException) { return; }
+                      catch (Exception) { /* Skip problematic folders */ }
+                  });
+
+                  _uiUpdateTimer.Stop();
+                  
+                  if (cancellationToken.IsCancellationRequested)
+                  {
+                      Dispatcher.Invoke(() => statusLabel.Text = "Scan cancelled.");
+                  }
+                  else
+                  {
+                      Dispatcher.Invoke(() =>
+                      {
+                          mainProgressBar.Value = _foldersScanned;
+                          statusLabel.Text = $"Scan complete: {_foldersScanned}/{_totalFoldersToScan} folders processed";
+                      });
+                  }
+              }, cancellationToken);
+          }
+          catch (OperationCanceledException)
+          {
+              statusLabel.Text = "Operation cancelled.";
+          }
+          catch (Exception ex)
+          {
+              System.Windows.MessageBox.Show($"Error scanning folder: {ex.Message}");
+          }
+          finally
+          {
+              _operationInProgress = false;
+              _cancellationTokenSource?.Dispose();
+              _cancellationTokenSource = null;
+              btnAddFolder.IsEnabled = true;
+              mainProgressBar.IsIndeterminate = false;
+              UpdateButtonStates();
+          }
       }
 
       // Handler for Remove Folder button: removes selected folder from scan list and cache
       private void RemoveFolder_Click(object sender, System.Windows.RoutedEventArgs e)
       {
-         if (listBoxFolders.SelectedItem is not string path) return;
-         _scanFolders.Remove(path);
-         listBoxFolders.Items.Remove(path);
-         _folderFileCache.TryRemove(path, out _);
-         Dispatcher.Invoke(UpdateButtonStates);
+          if (listBoxFolders.SelectedItem is not string path) return;
+          
+          // Count how many subfolders of this path were in the cache
+          int removedFolderCount = 0;
+          var keysToRemove = _folderFileCache.Keys.Where(k => k.StartsWith(path, StringComparison.OrdinalIgnoreCase)).ToList();
+          foreach (var key in keysToRemove)
+          {
+              _folderFileCache.TryRemove(key, out _);
+              _folderInfoCache.TryRemove(key, out _);
+              removedFolderCount++;
+          }
+          
+          _scanFolders.Remove(path);
+          listBoxFolders.Items.Remove(path);
+          _scanFolderSubfolderCounts.Remove(path);
+          _totalFoldersToScan = _scanFolderSubfolderCounts.Values.Sum();
+          _foldersScanned = Math.Max(0, _foldersScanned - removedFolderCount);
+          
+          Dispatcher.Invoke(() => {
+              mainProgressBar.Maximum = _totalFoldersToScan;
+              mainProgressBar.Value = _foldersScanned;
+              statusLabel.Text = _totalFoldersToScan > 0 ? 
+                  $"Ready to scan. Progress: {_foldersScanned}/{_totalFoldersToScan} folders." :
+                  "Ready to scan.";
+          });
+          Dispatcher.Invoke(UpdateButtonStates);
       }
 
       // Handler for Run Comparison button: scans all folders, computes matches, updates UI
       private void RunComparison_Click(object sender, System.Windows.RoutedEventArgs e)
       {
-         if (_scanFolders.Count < 1)
-         {
-            System.Windows.MessageBox.Show("Add at least one folder.");
-            UpdateButtonStates();
-            return;
-         }
+          if (_scanFolders.Count < 1)
+          {
+              System.Windows.MessageBox.Show("Add at least one folder.");
+              UpdateButtonStates();
+              return;
+          }
 
-         // Reset progress and status
-         _foldersScanned = 0;
-         _scanStatus = "Counting subfolders...";
-         Dispatcher.Invoke(() => {
-            mainProgressBar.Value = 0;
-            mainProgressBar.Maximum = 1;
-            statusLabel.Text = _scanStatus;
-         });
-         _uiUpdateTimer.Start();
-         UpdateButtonStates();
+          // Set up cancellation
+          _cancellationTokenSource = new CancellationTokenSource();
+          _operationInProgress = true;
+          var cancellationToken = _cancellationTokenSource.Token;
 
-         // Run scan and comparison in background
-         Task.Run(() =>
-         {
-            var allSubfolders = new List<string>();
-            int counted = 0;
-            // Recursively collect all subfolders for all scan roots
-            foreach (var root in _scanFolders)
-            {
-               foreach (var subfolder in Directory.GetDirectories(root, "*", SearchOption.AllDirectories).Prepend(root))
-               {
-                  allSubfolders.Add(subfolder);
-                  counted++;
-                  if (counted % 100 == 0)
-                  {
-                     Dispatcher.Invoke(() => statusLabel.Text = $"Counting subfolders: {counted}...");
-                  }
-               }
-            }
-            Dispatcher.Invoke(() => statusLabel.Text = $"Found {allSubfolders.Count} subfolders. Starting scan...");
-            _totalFoldersToScan = allSubfolders.Count;
-            _foldersScanned = 0;
-            Dispatcher.Invoke(() => {
-               mainProgressBar.Maximum = _totalFoldersToScan;
-               mainProgressBar.Value = 0;
-            });
+          // Switch to file comparison mode
+          _isFileComparisonMode = true;
+          _currentProgress = 0;
+          _maxProgress = 1;
+          _scanStatus = "Starting file comparison...";
+          
+          Dispatcher.Invoke(() => {
+              mainProgressBar.Value = 0;
+              mainProgressBar.Maximum = 1;
+              statusLabel.Text = _scanStatus;
+          });
+          
+          // Start the UI update timer for file comparison status updates
+          _uiUpdateTimer.Start();
+          UpdateButtonStates();
 
-            // Scan each subfolder in parallel, cache file lists and folder info
-            Parallel.ForEach(allSubfolders, new ParallelOptions { MaxDegreeOfParallelism = MaxParallelism }, subfolder =>
-            {
-               if (_folderFileCache.ContainsKey(subfolder)) return;
-               var files = Directory.GetFiles(subfolder, "*.*", SearchOption.TopDirectoryOnly);
-               _folderFileCache[subfolder] = files.ToList();
-               var info = new FolderInfo { Files = files.ToList(), TotalSize = files.Sum(f => new FileInfo(f).Length) };
-               _folderInfoCache[subfolder] = info;
-               int scanned = Interlocked.Increment(ref _foldersScanned);
-               if (scanned % 100 == 0 || scanned == _totalFoldersToScan)
-               {
-                  Dispatcher.Invoke(() => {
-                     mainProgressBar.Value = scanned;
-                     statusLabel.Text = $"Scanning: {scanned}/{_totalFoldersToScan} folders...";
+          // Use all cached subfolders for file comparison
+          var allSubfolders = _scanFolders
+              .SelectMany(root =>
+                  Directory.GetDirectories(root, "*", SearchOption.AllDirectories).Prepend(root))
+              .Where(subfolder => _folderFileCache.ContainsKey(subfolder))
+              .Distinct()
+              .ToList();
+
+          Task.Run(() =>
+          {
+              try
+              {
+                  // Compute file matches and aggregate folder matches
+                  var prog = new Progress<int>(v => {
+                      _currentProgress = v;
                   });
-               }
-            });
+                  var fileMatches = ComputeFileMatches(prog, allSubfolders, cancellationToken);
+                  
+                  if (cancellationToken.IsCancellationRequested)
+                  {
+                      Dispatcher.Invoke(() => statusLabel.Text = "Comparison cancelled.");
+                      return;
+                  }
+                  
+                  _lastFileMatches = fileMatches;
+                  _flatMatches = AggregateFolderMatches(fileMatches, cancellationToken);
+                  
+                  if (cancellationToken.IsCancellationRequested)
+                  {
+                      Dispatcher.Invoke(() => statusLabel.Text = "Comparison cancelled.");
+                      return;
+                  }
+                  
+                  // Populate ListView progressively with progress tracking
+                  PopulateListViewWithProgress(_flatMatches, cancellationToken);
+              }
+              catch (OperationCanceledException)
+              {
+                  Dispatcher.Invoke(() => statusLabel.Text = "Comparison cancelled.");
+              }
+              finally
+              {
+                  _uiUpdateTimer.Stop();
+                  _isFileComparisonMode = false;
+                  _operationInProgress = false;
+                  _cancellationTokenSource?.Dispose();
+                  _cancellationTokenSource = null;
+                  
+                  Dispatcher.Invoke(() => UpdateButtonStates());
+              }
+          }, cancellationToken);
+      }
 
-            Dispatcher.Invoke(() => {
-               mainProgressBar.Value = _totalFoldersToScan;
-               statusLabel.Text = "Finding candidate folders...";
-            });
+      // Populates the ListView with folder matches progressively, showing progress updates
+      private void PopulateListViewWithProgress(List<FolderMatch> matches, CancellationToken cancellationToken = default)
+      {
+          _scanStatus = "Populating results view...";
+          _maxProgress = matches.Count;
+          _currentProgress = 0;
+          
+          // Clear existing items on UI thread
+          Dispatcher.Invoke(() => 
+          {
+              _folderMatchCollection.Clear();
+              listViewFolderMatches.ItemsSource = _folderMatchCollection;
+          });
+          
+          int processedMatches = 0;
+          const int batchSize = 50; // Add items in batches for better performance
+          var batch = new List<FolderMatch>();
+          
+          foreach (var match in matches)
+          {
+              cancellationToken.ThrowIfCancellationRequested();
+              
+              batch.Add(match);
+              processedMatches++;
+              _currentProgress = processedMatches;
+              
+              // Update UI in batches for better performance
+              if (batch.Count >= batchSize || processedMatches == matches.Count)
+              {
+                  var currentBatch = batch.ToList(); // Copy for thread safety
+                  batch.Clear();
+                  
+                  Dispatcher.Invoke(() =>
+                  {
+                      foreach (var item in currentBatch)
+                      {
+                          _folderMatchCollection.Add(item);
+                      }
+                  });
+                  
+                  _scanStatus = $"Populating results: {processedMatches}/{matches.Count} folder matches added...";
+                  
+                  // Small delay to allow UI to update
+                  if (processedMatches < matches.Count)
+                  {
+                      Thread.Sleep(10);
+                  }
+              }
+          }
+          
+          Dispatcher.Invoke(() =>
+          {
+              statusLabel.Text = "Select a group to see details.";
+              mainProgressBar.Value = mainProgressBar.Maximum; // Show 100% completion
+          });
+      }
 
-            // Compute file matches and aggregate folder matches
-            var prog = new Progress<int>(v =>
-                Dispatcher.Invoke(() => mainProgressBar.Value = v));
-            var fileMatches = ComputeFileMatches(prog, allSubfolders);
-            _lastFileMatches = fileMatches;
-            _flatMatches = AggregateFolderMatches(fileMatches);
-            Dispatcher.Invoke(() => statusLabel.Text = $"File-first done ({fileMatches.Count} matches). Clustering…");
-
-            _uiUpdateTimer.Stop();
-            Dispatcher.Invoke(() =>
-            {
-               // Update ListView with all matches (unfiltered)
-               _folderMatchCollection = new ObservableCollection<FolderMatch>(_flatMatches);
-               listViewFolderMatches.ItemsSource = _folderMatchCollection;
-               statusLabel.Text = "Select a group to see details.";
-               UpdateButtonStates();
-            });
-         });
+      // Handler for Cancel button: cancels the current operation
+      private void Cancel_Click(object sender, System.Windows.RoutedEventArgs e)
+      {
+          if (_cancellationTokenSource != null && !_cancellationTokenSource.Token.IsCancellationRequested)
+          {
+              _cancellationTokenSource.Cancel();
+              _scanStatus = "Cancelling operation...";
+              Dispatcher.Invoke(() => statusLabel.Text = _scanStatus);
+          }
       }
 
       // Handler for Save Project button: saves current scan state and caches to file
@@ -313,100 +564,134 @@ namespace FolderDupFinder
 
       // Computes file matches between all folders, using hashes for duplicate detection
       // Returns a list of FileMatch records for all detected duplicate files
-      private List<FileMatch> ComputeFileMatches(System.IProgress<int> prog, List<string> allFolders)
+      private List<FileMatch> ComputeFileMatches(System.IProgress<int> prog, List<string> allFolders, CancellationToken cancellationToken = default)
       {
-         // Build a map of (filename, size) to folders containing such files
-         int potentialPairs = 0;
-         var fileNameSizeToFolders = new Dictionary<(string, long), List<string>>();
-         foreach (var folder in allFolders)
-         {
-            foreach (var file in _folderFileCache[folder])
-            {
-               var info = new FileInfo(file);
-               var key = (info.Name.ToLowerInvariant(), info.Length);
-               if (!fileNameSizeToFolders.TryGetValue(key, out var list))
-                  fileNameSizeToFolders[key] = list = new List<string>();
-               if (!list.Contains(folder))
-                  list.Add(folder);
-            }
-         }
-         _potentialSharedFiles.Clear();
-         // For each file group, count potential shared files between folder pairs
-         foreach (var folders in fileNameSizeToFolders.Values.Where(f => f.Count > 1))
-         {
-            for (int i = 0; i < folders.Count; i++)
-               for (int j = i + 1; j < folders.Count; j++)
-               {
-                  if (folders[i] == folders[j]) continue;
-                  var key = folders[i].CompareTo(folders[j]) < 0 ? (folders[i], folders[j]) : (folders[j], folders[i]);
-                  if (!_potentialSharedFiles.ContainsKey(key))
-                  {
-                     _potentialSharedFiles[key] = 0;
-                     potentialPairs++;
-                  }
-                  _potentialSharedFiles[key]++;
-               }
-         }
-         Dispatcher.Invoke(() => _scanStatus = $"fileNameSizeToFolders entries: {fileNameSizeToFolders.Count}");
-         Dispatcher.Invoke(() => _scanStatus = $"Found {potentialPairs} potential folder pairs to compare");
+          // Phase 1: Build file index with progress tracking
+          _scanStatus = "Building file index...";
+          _maxProgress = allFolders.Count;
+          _currentProgress = 0;
+          
+          int potentialPairs = 0;
+          var fileNameSizeToFolders = new Dictionary<(string, long), List<string>>();
+          int processedFolders = 0;
+          
+          foreach (var folder in allFolders)
+          {
+              cancellationToken.ThrowIfCancellationRequested();
+              
+              foreach (var file in _folderFileCache[folder])
+              {
+                  var info = new FileInfo(file);
+                  var key = (info.Name.ToLowerInvariant(), info.Length);
+                  if (!fileNameSizeToFolders.TryGetValue(key, out var list))
+                     fileNameSizeToFolders[key] = list = new List<string>();
+                  if (!list.Contains(folder))
+                     list.Add(folder);
+              }
+              processedFolders++;
+              _currentProgress = processedFolders;
+              if (processedFolders % 50 == 0)
+              {
+                  _scanStatus = $"Building file index: {processedFolders}/{allFolders.Count} folders...";
+              }
+          }
+          
+          cancellationToken.ThrowIfCancellationRequested();
+          
+          // Phase 2: Analyze potential duplicates
+          _scanStatus = "Analyzing potential duplicates...";
+          _potentialSharedFiles.Clear();
+          
+          // For each file group, count potential shared files between folder pairs
+          foreach (var folders in fileNameSizeToFolders.Values.Where(f => f.Count > 1))
+          {
+              cancellationToken.ThrowIfCancellationRequested();
+              
+              for (int i = 0; i < folders.Count; i++)
+                 for (int j = i + 1; j < folders.Count; j++)
+                 {
+                    if (folders[i] == folders[j]) continue;
+                    var key = folders[i].CompareTo(folders[j]) < 0 ? (folders[i], folders[j]) : (folders[j], folders[i]);
+                    if (!_potentialSharedFiles.ContainsKey(key))
+                    {
+                       _potentialSharedFiles[key] = 0;
+                       potentialPairs++;
+                    }
+                    _potentialSharedFiles[key]++;
+                 }
+          }
+          
+          cancellationToken.ThrowIfCancellationRequested();
+          
+          // Phase 3: Group files by name and size
+          _scanStatus = $"Found {potentialPairs} potential folder pairs. Grouping files...";
+          var allFiles = allFolders.SelectMany(f => _folderFileCache[f]).ToList();
+          
+          var dict = allFiles.GroupBy(KeyForFile)
+                            .Where(g => g.Count() > 1)
+                            .ToDictionary(g => g.Key, g => g.ToList());
+          
+          cancellationToken.ThrowIfCancellationRequested();
+          
+          // Phase 4: Hash comparison with progress tracking
+          _scanStatus = $"Comparing {dict.Count} potential duplicate groups...";
+          _maxProgress = dict.Count;
+          _currentProgress = 0;
 
-         // Group all files by (name+size) and keep only those with duplicates
-         var allFiles = allFolders.SelectMany(f => _folderFileCache[f]).ToList();
-         Dispatcher.Invoke(() => _scanStatus = $"Total files to group: {allFiles.Count}");
-         var dict = allFiles.GroupBy(KeyForFile)
-                           .Where(g => g.Count() > 1)
-                           .ToDictionary(g => g.Key, g => g.ToList());
-         Dispatcher.Invoke(() => _scanStatus = $"Potential duplicate groups: {dict.Count}");
+          var bag = new ConcurrentBag<FileMatch>();
+          int processed = 0;
+          _confirmedDuplicates.Clear();
+          var duplicatePairs = new ConcurrentDictionary<(string, string), int>();
 
-         var bag = new ConcurrentBag<FileMatch>();
-         int processed = 0;
-         _confirmedDuplicates.Clear();
+          Parallel.ForEach(dict.Values, new ParallelOptions { 
+              MaxDegreeOfParallelism = MaxParallelism,
+              CancellationToken = cancellationToken 
+          }, list =>
+          {
+             cancellationToken.ThrowIfCancellationRequested();
+             
+             for (int i = 0; i < list.Count; i++)
+             {
+                cancellationToken.ThrowIfCancellationRequested();
+                
+                var folderA = Path.GetDirectoryName(list[i]);
+                string h1 = GetHash(list[i]);
+                if (h1 == string.Empty) continue;
 
-         // For each group of potential duplicates, compare hashes to confirm duplicates
-         Dispatcher.Invoke(() =>
-         {
-            mainProgressBar.Maximum = dict.Count;
-            _scanStatus = $"Comparing {dict.Count} potential duplicate groups...";
-         });
+                for (int j = i + 1; j < list.Count; j++)
+                {
+                   var folderB = Path.GetDirectoryName(list[j]);
+                   if (folderA == folderB) continue;
 
-         var duplicatePairs = new ConcurrentDictionary<(string, string), int>();
+                   string h2 = GetHash(list[j]);
+                   if (h1 == h2)
+                   {
+                      bag.Add(new FileMatch(list[i], list[j]));
+                      var key = folderA.CompareTo(folderB) < 0 ? (folderA, folderB) : (folderB, folderA);
+                      duplicatePairs.AddOrUpdate(key, 1, (_, count) => count + 1);
+                   }
+                }
+             }
+             var currentProcessed = Interlocked.Increment(ref processed);
+             _currentProgress = currentProcessed;
+             if (currentProcessed % 10 == 0 || currentProcessed == dict.Count)
+             {
+                 _scanStatus = $"Processed {currentProcessed} of {dict.Count} groups... ({bag.Count} matches found)";
+             }
+             prog.Report(currentProcessed);
+          });
 
-         Parallel.ForEach(dict.Values, new ParallelOptions { MaxDegreeOfParallelism = MaxParallelism }, list =>
-         {
-            for (int i = 0; i < list.Count; i++)
-            {
-               var folderA = Path.GetDirectoryName(list[i]);
-               string h1 = GetHash(list[i]);
-               if (h1 == string.Empty) continue;
+          cancellationToken.ThrowIfCancellationRequested();
 
-               for (int j = i + 1; j < list.Count; j++)
-               {
-                  var folderB = Path.GetDirectoryName(list[j]);
-                  if (folderA == folderB) continue;
+          // Store confirmed duplicate counts for each folder pair
+          foreach (var pair in duplicatePairs)
+          {
+             _confirmedDuplicates[pair.Key] = pair.Value;
+          }
 
-                  string h2 = GetHash(list[j]);
-                  if (h1 == h2)
-                  {
-                     bag.Add(new FileMatch(list[i], list[j]));
-                     var key = folderA.CompareTo(folderB) < 0 ? (folderA, folderB) : (folderB, folderA);
-                     duplicatePairs.AddOrUpdate(key, 1, (_, count) => count + 1);
-                  }
-               }
-            }
-            var currentProcessed = Interlocked.Increment(ref processed);
-            Dispatcher.Invoke(() => _scanStatus = $"Processed {currentProcessed} of {dict.Count} groups...");
-            prog.Report(currentProcessed);
-         });
-
-         // Store confirmed duplicate counts for each folder pair
-         foreach (var pair in duplicatePairs)
-         {
-            _confirmedDuplicates[pair.Key] = pair.Value;
-         }
-
-         var result = bag.ToList();
-         Dispatcher.Invoke(() => _scanStatus = $"Found {result.Count} duplicate files across {_confirmedDuplicates.Count} folder pairs");
-         return result;
+          var result = bag.ToList();
+          _scanStatus = $"Found {result.Count} duplicate files across {_confirmedDuplicates.Count} folder pairs";
+          return result;
       }
 
       // Returns a unique key for a file based on its name and size
@@ -431,17 +716,60 @@ namespace FolderDupFinder
          catch { return string.Empty; }
       }
 
-      // Aggregates file matches into folder matches (pairwise)
-      private List<FolderMatch> AggregateFolderMatches(IEnumerable<FileMatch> files)
+      // Aggregates file matches into folder matches (pairwise) with progress tracking
+      private List<FolderMatch> AggregateFolderMatches(IEnumerable<FileMatch> files, CancellationToken cancellationToken = default)
       {
-         var dict = new Dictionary<(string, string), List<FileMatch>>();
-         foreach (var m in files)
-         {
-            var key = (Path.GetDirectoryName(m.A), Path.GetDirectoryName(m.B));
-            if (!dict.ContainsKey(key)) dict[key] = new List<FileMatch>();
-            dict[key].Add(m);
-         }
-         return dict.Select(kv => new FolderMatch(kv.Key.Item1, kv.Key.Item2, kv.Value)).ToList();
+          _scanStatus = "Aggregating folder matches...";
+          var filesList = files.ToList();
+          _maxProgress = filesList.Count;
+          _currentProgress = 0;
+          
+          var dict = new Dictionary<(string, string), List<FileMatch>>();
+          int processedFiles = 0;
+          
+          foreach (var m in filesList)
+          {
+              cancellationToken.ThrowIfCancellationRequested();
+              
+              var key = (Path.GetDirectoryName(m.A), Path.GetDirectoryName(m.B));
+              if (!dict.ContainsKey(key)) dict[key] = new List<FileMatch>();
+              dict[key].Add(m);
+              
+              processedFiles++;
+              _currentProgress = processedFiles;
+              
+              if (processedFiles % 100 == 0 || processedFiles == filesList.Count)
+              {
+                  _scanStatus = $"Aggregating matches: {processedFiles}/{filesList.Count} files processed...";
+              }
+          }
+          
+          _scanStatus = "Building folder match objects...";
+          var folderPairs = dict.Keys.ToList();
+          _maxProgress = folderPairs.Count;
+          _currentProgress = 0;
+
+          var result = new List<FolderMatch>();
+          int processedPairs = 0;
+
+          foreach (var kvp in dict)
+          {
+              cancellationToken.ThrowIfCancellationRequested();
+              
+              var folderMatch = new FolderMatch(kvp.Key.Item1, kvp.Key.Item2, kvp.Value);
+              result.Add(folderMatch);
+              
+              processedPairs++;
+              _currentProgress = processedPairs;
+              
+              if (processedPairs % 50 == 0 || processedPairs == folderPairs.Count)
+              {
+                  _scanStatus = $"Creating folder matches: {processedPairs}/{folderPairs.Count} pairs processed...";
+              }
+          }
+
+          _scanStatus = $"Built {result.Count} folder matches from {filesList.Count} file matches";
+          return result;
       }
 
       // Builds a tree of folder matches for hierarchical display (not used in main ListView)
@@ -648,36 +976,251 @@ namespace FolderDupFinder
          return 0;
       }
 
+      // Enhanced multi-column sorting with visual feedback and Ctrl+Click support
       private void GridViewColumnHeader_Click(object sender, System.Windows.RoutedEventArgs e)
       {
          if (listViewFolderMatches.ItemsSource == null) return;
-         var header = (e.OriginalSource as GridViewColumnHeader)?.Content?.ToString();
-         string prop = header switch
+         
+         var header = e.OriginalSource as GridViewColumnHeader;
+         if (header?.Content?.ToString() is not string headerText) return;
+
+         string property = headerText switch
          {
             "Similarity (%)" => "Similarity",
             "Size" => "SizeBytes",
             "Folder Name" => "FolderName",
             "Master Folder" => "Left",
-            _ => "Master"
+            _ => headerText
          };
 
-         _sortOrder.RemoveAll(x => x.Property == prop);
-
-         ListSortDirection dir = ListSortDirection.Descending;
-         if (_sortOrder.Count > 0 && _sortOrder[0].Property == prop)
+         // Check if Ctrl key is pressed for multi-column sorting
+         bool isMultiSort = System.Windows.Input.Keyboard.Modifiers.HasFlag(System.Windows.Input.ModifierKeys.Control);
+         
+         if (!isMultiSort)
          {
-            dir = _sortOrder[0].Direction == ListSortDirection.Ascending ? ListSortDirection.Descending : ListSortDirection.Ascending;
+            // Single column sort - clear existing sorts
+            _sortOrder.Clear();
+         }
+         
+         // Remove this property if it already exists
+         var existingSort = _sortOrder.FirstOrDefault(x => x.Property == property);
+         if (existingSort != default)
+         {
+            _sortOrder.Remove(existingSort);
          }
 
-         _sortOrder.Insert(0, (prop, dir));
+         // Determine sort direction
+         ListSortDirection direction = ListSortDirection.Descending;
+         if (existingSort != default)
+         {
+            // Toggle direction if re-clicking the same column
+            direction = existingSort.Direction == ListSortDirection.Ascending 
+               ? ListSortDirection.Descending 
+               : ListSortDirection.Ascending;
+         }
 
+         // Add new sort at the beginning (highest priority)
+         _sortOrder.Insert(0, (property, direction, 1));
+
+         // Update priorities and limit sort levels
+         for (int i = 0; i < _sortOrder.Count && i < MaxSortLevels; i++)
+         {
+            var sort = _sortOrder[i];
+            _sortOrder[i] = (sort.Property, sort.Direction, i + 1);
+         }
+
+         // Remove excess sort levels
+         if (_sortOrder.Count > MaxSortLevels)
+         {
+            _sortOrder.RemoveRange(MaxSortLevels, _sortOrder.Count - MaxSortLevels);
+         }
+
+         // Apply sorting to the view
+         ApplySortingToView();
+         
+         // Update column headers with visual indicators
+         UpdateColumnHeaderSortIndicators();
+      }
+
+      // Enhanced multi-column sorting for file details ListView
+      private void FileListGridViewColumnHeader_Click(object sender, System.Windows.RoutedEventArgs e)
+      {
+         if (listViewFiles.ItemsSource == null) return;
+         
+         var header = e.OriginalSource as GridViewColumnHeader;
+         if (header?.Content?.ToString() is not string headerText) return;
+
+         string property = headerText switch
+         {
+            "File Name" => "FileName",
+            "Size" => "SizeBytes",
+            "Location" => "Location",
+            _ => headerText
+         };
+
+         // Check if Ctrl key is pressed for multi-column sorting
+         bool isMultiSort = System.Windows.Input.Keyboard.Modifiers.HasFlag(System.Windows.Input.ModifierKeys.Control);
+         
+         if (!isMultiSort)
+         {
+            // Single column sort - clear existing sorts
+            _filesSortOrder.Clear();
+         }
+         
+         // Remove this property if it already exists
+         var existingSort = _filesSortOrder.FirstOrDefault(x => x.Property == property);
+         if (existingSort != default)
+         {
+            _filesSortOrder.Remove(existingSort);
+         }
+
+         // Determine sort direction
+         ListSortDirection direction = ListSortDirection.Ascending;
+         if (existingSort != default)
+         {
+            // Toggle direction if re-clicking the same column
+            direction = existingSort.Direction == ListSortDirection.Ascending 
+               ? ListSortDirection.Descending 
+               : ListSortDirection.Ascending;
+         }
+
+         // Add new sort at the beginning (highest priority)
+         _filesSortOrder.Insert(0, (property, direction, 1));
+
+         // Update priorities and limit sort levels
+         for (int i = 0; i < _filesSortOrder.Count && i < MaxSortLevels; i++)
+         {
+            var sort = _filesSortOrder[i];
+            _filesSortOrder[i] = (sort.Property, sort.Direction, i + 1);
+         }
+
+         // Remove excess sort levels
+         if (_filesSortOrder.Count > MaxSortLevels)
+         {
+            _filesSortOrder.RemoveRange(MaxSortLevels, _filesSortOrder.Count - MaxSortLevels);
+         }
+
+         // Apply sorting to the file list view
+         ApplyFileListSorting();
+         
+         // Update column headers with visual indicators
+         UpdateFileListColumnHeaders();
+      }
+
+      // Applies the current sort order to the ListView
+      private void ApplySortingToView()
+      {
          var view = CollectionViewSource.GetDefaultView(listViewFolderMatches.ItemsSource);
          view.SortDescriptions.Clear();
-         foreach (var (property, d) in _sortOrder)
+         
+         foreach (var (property, direction, priority) in _sortOrder)
          {
-            view.SortDescriptions.Add(new SortDescription(property, d));
+            view.SortDescriptions.Add(new SortDescription(property, direction));
          }
+         
          view.Refresh();
+      }
+
+      // Applies the current sort order to the file details ListView
+      private void ApplyFileListSorting()
+      {
+         var view = CollectionViewSource.GetDefaultView(listViewFiles.ItemsSource);
+         view.SortDescriptions.Clear();
+         
+         foreach (var (property, direction, priority) in _filesSortOrder)
+         {
+            view.SortDescriptions.Add(new SortDescription(property, direction));
+         }
+         
+         view.Refresh();
+      }
+
+      // Updates column headers with sort indicators (arrows and priority numbers)
+      private void UpdateColumnHeaderSortIndicators()
+      {
+         // Find the GridView to access headers
+         if (listViewFolderMatches.View is not GridView gridView) return;
+
+         foreach (var column in gridView.Columns)
+         {
+            if (column.Header is string headerText)
+            {
+               string property = headerText switch
+               {
+                  "Similarity (%)" => "Similarity",
+                  "Size" => "SizeBytes", 
+                  "Folder Name" => "FolderName",
+                  "Master Folder" => "Left",
+                  _ => headerText
+               };
+
+               var sortInfo = _sortOrder.FirstOrDefault(x => x.Property == property);
+               if (sortInfo != default)
+               {
+                  // Column is being sorted
+                  string arrow = sortInfo.Direction == ListSortDirection.Ascending ? " ↑" : " ↓";
+                  string priority = _sortOrder.Count > 1 ? $" ({sortInfo.Priority})" : "";
+                  
+                  // Update header text with indicators
+                  string baseHeader = headerText.Split(' ')[0] + 
+                     (headerText.Contains("(%)") ? " (%)" : "");
+                  column.Header = baseHeader + arrow + priority;
+               }
+               else
+               {
+                  // Column is not sorted - restore original header
+                  string baseHeader = headerText.Split(' ')[0] + 
+                     (headerText.Contains("(%)") ? " (%)" : "");
+                  column.Header = baseHeader;
+               }
+            }
+         }
+      }
+
+      // Updates file list column headers with sort indicators
+      private void UpdateFileListColumnHeaders()
+      {
+         if (listViewFiles.View is not GridView gridView) return;
+
+         foreach (var column in gridView.Columns)
+         {
+            if (column.Header is string headerText)
+            {
+               string property = headerText switch
+               {
+                  "File Name" => "FileName",
+                  "Size" => "SizeBytes",
+                  "Location" => "Location",
+                  _ => headerText
+               };
+
+               var sortInfo = _filesSortOrder.FirstOrDefault(x => x.Property == property);
+               if (sortInfo != default)
+               {
+                  // Column is being sorted
+                  string arrow = sortInfo.Direction == ListSortDirection.Ascending ? " ↑" : " ↓";
+                  string priority = _filesSortOrder.Count > 1 ? $" ({sortInfo.Priority})" : "";
+                  
+                  // Update header text with indicators
+                  string baseHeader = headerText.Split(' ')[0];
+                  if (headerText.Contains("Name")) baseHeader = "File Name";
+                  column.Header = baseHeader + arrow + priority;
+               }
+               else
+               {
+                  // Column is not sorted - restore original header
+                  column.Header = headerText.Split(' ')[0] == "File" ? "File Name" : headerText.Split(' ')[0];
+               }
+            }
+         }
+      }
+
+      // Clears all sorting and resets to default view
+      private void ClearAllSorting()
+      {
+         _sortOrder.Clear();
+         ApplySortingToView();
+         UpdateColumnHeaderSortIndicators();
       }
 
       private void ApplyFilters_Click(object sender, RoutedEventArgs e)
@@ -690,38 +1233,188 @@ namespace FolderDupFinder
          minSizeBytes = (long)(minSizeMb * 1024 * 1024);
 
          var filtered = _flatMatches.Where(f => f.Similarity >= minSimilarity && f.SizeBytes >= minSizeBytes).ToList();
-         _folderMatchCollection = new ObservableCollection<FolderMatch>(filtered);
-         listViewFolderMatches.ItemsSource = _folderMatchCollection;
+         
+         // Use progressive population for filtered results too
+         Task.Run(() =>
+         {
+             try
+             {
+                 _operationInProgress = true;
+                 _isFileComparisonMode = true;
+                 
+                 Dispatcher.Invoke(() => UpdateButtonStates());
+                 
+                 _uiUpdateTimer.Start();
+                 PopulateListViewWithProgress(filtered);
+             }
+             finally
+             {
+                 _uiUpdateTimer.Stop();
+                 _isFileComparisonMode = false;
+                 _operationInProgress = false;
+                 
+                 Dispatcher.Invoke(() => UpdateButtonStates());
+             }
+         });
       }
 
-      // Selection changed handler (simplified to use TreeView only)
+      // Enhanced selection changed handler for the new file details interface
       private void listViewFolderMatches_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
       {
-         treeViewMatches.Items.Clear();
-         if (listViewFolderMatches.SelectedItem is not FolderMatch item) return;
+          // Clear the file details
+          ClearFileDetails();
+          
+          if (listViewFolderMatches.SelectedItem is not FolderMatch item) return;
 
-         string left = item.Left;
-         string right = item.Right;
-         var files = item.Files;
-         if (string.IsNullOrEmpty(left) || string.IsNullOrEmpty(right) || files == null) return;
+          string leftFolder = item.Left;
+          string rightFolder = item.Right;
+          var duplicateFiles = item.Files;
+          
+          if (string.IsNullOrEmpty(leftFolder) || string.IsNullOrEmpty(rightFolder) || duplicateFiles == null) return;
 
-         var root = new TreeViewItem { Header = $"{left} ⇄ {right}" };
-         foreach (var match in files)
-         {
-            var fileA = match.A;
-            var fileB = match.B;
-            var sizeA = new FileInfo(fileA).Length;
-            var sizeB = new FileInfo(fileB).Length;
-            var fileItem = new TreeViewItem {
-                Header = $"{Path.GetFileName(fileA)} ({FormatSize(sizeA)}) ⇄ {Path.GetFileName(fileB)} ({FormatSize(sizeB)})",
-                ToolTip = $"{fileA} ⇄ {fileB}"
-            };
-            root.Items.Add(fileItem);
-         }
-         root.ToolTip = $"{left} ⇄ {right}";
-         treeViewMatches.Items.Add(root);
+          // Update folder path text displays
+          txtLeftFolderDisplay.Text = leftFolder;
+          txtRightFolderDisplay.Text = rightFolder;
+          
+          // Build comprehensive file list
+          BuildFileDetailsList(leftFolder, rightFolder, duplicateFiles);
       }
 
+      // Event handler for the "Show unique files" checkbox
+      private void ShowUniqueFiles_Changed(object sender, System.Windows.RoutedEventArgs e)
+      {
+          _showUniqueFiles = chkShowUniqueFiles.IsChecked == true;
+          FilterFileDetails();
+      }
+
+      // Clears the file details panel
+      private void ClearFileDetails()
+      {
+          txtLeftFolderDisplay.Text = "";
+          txtRightFolderDisplay.Text = "";
+          _allFileDetails.Clear();
+          _fileDetailCollection.Clear();
+          listViewFiles.ItemsSource = null;
+          lblFileCount.Text = "0";
+      }
+
+      // Builds the comprehensive file details list for the selected folder pair
+      private void BuildFileDetailsList(string leftFolder, string rightFolder, List<FileMatch> duplicateFiles)
+      {
+          _allFileDetails.Clear();
+          
+          // Get all files from both folders
+          var leftFiles = _folderFileCache.TryGetValue(leftFolder, out var leftList) ? leftList : new List<string>();
+          var rightFiles = _folderFileCache.TryGetValue(rightFolder, out var rightList) ? rightList : new List<string>();
+          
+          // Create a set of duplicate file names for quick lookup
+          var duplicateFileNames = new HashSet<string>();
+          var duplicateFileLookup = new Dictionary<string, (string leftPath, string rightPath)>();
+          
+          foreach (var match in duplicateFiles)
+          {
+              var leftFileName = Path.GetFileName(match.A);
+              var rightFileName = Path.GetFileName(match.B);
+              
+              duplicateFileNames.Add(leftFileName.ToLowerInvariant());
+              duplicateFileLookup[leftFileName.ToLowerInvariant()] = (match.A, match.B);
+          }
+          
+          // Process duplicate files first
+          foreach (var match in duplicateFiles)
+          {
+              var fileName = Path.GetFileName(match.A);
+              var fileInfo = new FileInfo(match.A);
+              
+              _allFileDetails.Add(new FileDetailViewModel
+              {
+                  FileName = fileName,
+                  SizeDisplay = FormatSize(fileInfo.Length),
+                  SizeBytes = fileInfo.Length,
+                  Location = "Both",
+                  FullPathLeft = match.A,
+                  FullPathRight = match.B,
+                  IsUnique = false
+              });
+          }
+          
+          // Process unique files from left folder
+          foreach (var filePath in leftFiles)
+          {
+              var fileName = Path.GetFileName(filePath);
+              if (!duplicateFileNames.Contains(fileName.ToLowerInvariant()))
+              {
+                  var fileInfo = new FileInfo(filePath);
+                  _allFileDetails.Add(new FileDetailViewModel
+                  {
+                      FileName = fileName,
+                      SizeDisplay = FormatSize(fileInfo.Length),
+                      SizeBytes = fileInfo.Length,
+                      Location = "Left",
+                      FullPathLeft = filePath,
+                      FullPathRight = "",
+                      IsUnique = true
+                  });
+              }
+          }
+          
+          // Process unique files from right folder
+          foreach (var filePath in rightFiles)
+          {
+              var fileName = Path.GetFileName(filePath);
+              if (!duplicateFileNames.Contains(fileName.ToLowerInvariant()))
+              {
+                  var fileInfo = new FileInfo(filePath);
+                  _allFileDetails.Add(new FileDetailViewModel
+                  {
+                      FileName = fileName,
+                      SizeDisplay = FormatSize(fileInfo.Length),
+                      SizeBytes = fileInfo.Length,
+                      Location = "Right",
+                      FullPathLeft = "",
+                      FullPathRight = filePath,
+                      IsUnique = true
+                  });
+              }
+          }
+          
+          // Sort files by name
+          _allFileDetails = _allFileDetails.OrderBy(f => f.FileName).ToList();
+          
+          // Apply current filter
+          FilterFileDetails();
+      }
+
+      // Filters the file details based on the current settings
+      private void FilterFileDetails()
+      {
+          var filteredFiles = _showUniqueFiles ? 
+              _allFileDetails : 
+              _allFileDetails.Where(f => !f.IsUnique).ToList();
+          
+          _fileDetailCollection = new ObservableCollection<FileDetailViewModel>(filteredFiles);
+          listViewFiles.ItemsSource = _fileDetailCollection;
+          
+          // Update file count
+          var duplicateCount = _allFileDetails.Count(f => !f.IsUnique);
+          var uniqueCount = _allFileDetails.Count(f => f.IsUnique);
+          
+          if (_showUniqueFiles)
+          {
+              lblFileCount.Text = $"{_allFileDetails.Count} total ({duplicateCount} duplicates, {uniqueCount} unique)";
+          }
+          else
+          {
+              lblFileCount.Text = $"{duplicateCount} duplicates";
+          }
+      }
+
+      // Handler for Clear Sort button - resets all sorting to default
+      private void ClearSort_Click(object sender, System.Windows.RoutedEventArgs e)
+      {
+         ClearAllSorting();
+         statusLabel.Text = "Sorting cleared - showing default order.";
+      }
       // Keep all other existing methods as they are...
    }
 }
