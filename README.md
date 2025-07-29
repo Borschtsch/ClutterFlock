@@ -4,7 +4,9 @@ This tool can help you to optimize your decades old back-ups or find latest vers
 Imagine you took photos and never sorted them, but moved them around, replaced back-up drives and now you have multiples copies of the same photos from the same day in multiple places. How to find all the folders with the same data, not just individual files?
 
 I ran into the problem of huge unsorted back-ups and no tool on the market that I could possibly find could help me with that, it either takes too long to scan the files or too much of my time to crawl through the files.
-It supports filtering folders by the minimum size and minimum similarity level. Also tool can show content of the folder duplicates in a directory diff-merge style with only the files present in both directories or including the unique files.
+
+FolderDupFinder supports filtering folders by the minimum size and minimum similarity level. Also tool can show content of the folder duplicates in a directory diff-merge style with only the files present in both directories or including the unique files.
+See this simplified UI below. No settings, no smart features, just getting you straght to your data.
 
 ![Alt text](/Screenshot/Main.jpg?raw=true "Example analysis")
 
