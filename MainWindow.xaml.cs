@@ -39,15 +39,12 @@ namespace FolderDupFinder
       // Structures for tracking potential and confirmed duplicate files between folder pairs
       private readonly Dictionary<(string, string), int> _potentialSharedFiles = new();
       private readonly Dictionary<(string, string), int> _confirmedDuplicates = new();
-      private readonly Dictionary<(string, long), List<string>> _fileNameSizeToFolders = new();
 
       // Cache for folder info (files, size, count) for quick access
       private readonly ConcurrentDictionary<string, FolderInfo> _folderInfoCache = new();
 
-      // Results: flat and tree representations of folder matches
+      // Results: flat representation of folder matches
       private List<FolderMatch> _flatMatches = new();
-      private List<FolderMatchNode> _treeMatches = new();
-      private const double SimilarityThreshold = 90.0; // % threshold for nesting in tree view
 
       // UI update timer for progress bar and status
       private System.Timers.Timer _uiUpdateTimer;
@@ -61,7 +58,7 @@ namespace FolderDupFinder
       private bool _isFileComparisonMode = false;
 
       // Cancellation support
-      private CancellationTokenSource _cancellationTokenSource;
+      private CancellationTokenSource? _cancellationTokenSource;
       private bool _operationInProgress = false;
 
       // Controls parallelism for folder/file processing
@@ -353,7 +350,6 @@ namespace FolderDupFinder
           // Switch to file comparison mode
           _isFileComparisonMode = true;
           _currentProgress = 0;
-          _maxProgress = 1;
           _scanStatus = "Starting file comparison...";
           
           Dispatcher.Invoke(() => {
@@ -548,20 +544,6 @@ namespace FolderDupFinder
       }
 
       // ═════════════════════════════ SCAN & CACHE ═════════════════════════════
-      // Scans a folder and all its subfolders, caching file lists and folder info
-      private void ScanFolder(string folder)
-      {
-         foreach (var subfolder in Directory.GetDirectories(folder, "*", SearchOption.AllDirectories).Prepend(folder))
-         {
-            if (_folderFileCache.ContainsKey(subfolder)) continue; // already cached
-            var files = Directory.GetFiles(subfolder, "*.*", SearchOption.TopDirectoryOnly);
-            _folderFileCache[subfolder] = files.ToList();
-            // Cache folder info for UI (size/count)
-            var info = new FolderInfo { Files = files.ToList(), TotalSize = files.Sum(f => new FileInfo(f).Length) };
-            _folderInfoCache[subfolder] = info;
-         }
-      }
-
       // Computes file matches between all folders, using hashes for duplicate detection
       // Returns a list of FileMatch records for all detected duplicate files
       private List<FileMatch> ComputeFileMatches(System.IProgress<int> prog, List<string> allFolders, CancellationToken cancellationToken = default)
@@ -611,13 +593,14 @@ namespace FolderDupFinder
                  for (int j = i + 1; j < folders.Count; j++)
                  {
                     if (folders[i] == folders[j]) continue;
-                    var key = folders[i].CompareTo(folders[j]) < 0 ? (folders[i], folders[j]) : (folders[j], folders[i]);
-                    if (!_potentialSharedFiles.ContainsKey(key))
+                    var key = (folders[i], folders[j]);
+                    var sortedKey = folders[i].CompareTo(folders[j]) < 0 ? key : (folders[j], folders[i]);
+                    if (!_potentialSharedFiles.ContainsKey(sortedKey))
                     {
-                       _potentialSharedFiles[key] = 0;
+                       _potentialSharedFiles[sortedKey] = 0;
                        potentialPairs++;
                     }
-                    _potentialSharedFiles[key]++;
+                    _potentialSharedFiles[sortedKey]++;
                  }
           }
           
@@ -654,13 +637,13 @@ namespace FolderDupFinder
              {
                 cancellationToken.ThrowIfCancellationRequested();
                 
-                var folderA = Path.GetDirectoryName(list[i]);
+                var folderA = Path.GetDirectoryName(list[i]) ?? "";
                 string h1 = GetHash(list[i]);
                 if (h1 == string.Empty) continue;
 
                 for (int j = i + 1; j < list.Count; j++)
                 {
-                   var folderB = Path.GetDirectoryName(list[j]);
+                   var folderB = Path.GetDirectoryName(list[j]) ?? "";
                    if (folderA == folderB) continue;
 
                    string h2 = GetHash(list[j]);
@@ -731,7 +714,7 @@ namespace FolderDupFinder
           {
               cancellationToken.ThrowIfCancellationRequested();
               
-              var key = (Path.GetDirectoryName(m.A), Path.GetDirectoryName(m.B));
+              var key = (Path.GetDirectoryName(m.A) ?? "", Path.GetDirectoryName(m.B) ?? "");
               if (!dict.ContainsKey(key)) dict[key] = new List<FileMatch>();
               dict[key].Add(m);
               
@@ -772,131 +755,6 @@ namespace FolderDupFinder
           return result;
       }
 
-      // Builds a tree of folder matches for hierarchical display (not used in main ListView)
-      private List<FolderMatchNode> BuildFolderMatchTree(IEnumerable<FolderMatch> flat, double threshold)
-      {
-         var nodes = flat.Select(f => new FolderMatchNode(f)).ToList();
-         var roots = new List<FolderMatchNode>();
-
-         foreach (var node in nodes)
-         {
-            FolderMatchNode parent = null;
-            foreach (var candidate in nodes)
-            {
-               if (candidate == node) continue;
-               if (node.Left.StartsWith(candidate.Left, StringComparison.OrdinalIgnoreCase) &&
-                   node.Right.StartsWith(candidate.Right, StringComparison.OrdinalIgnoreCase) &&
-                   candidate.Similarity >= threshold)
-               {
-                  if (parent == null || candidate.Left.Length > parent.Left.Length)
-                     parent = candidate;
-               }
-            }
-            if (parent != null) parent.Children.Add(node);
-            else roots.Add(node);
-         }
-         return roots;
-      }
-
-      // Builds clusters of similar folders using confirmed duplicates (not used in ListView)
-      private List<FolderCluster> BuildFolderClusters(List<FileMatch> fileMatches)
-      {
-         Dispatcher.Invoke(() => _scanStatus = "Building folder clusters...");
-         var pairs = _potentialSharedFiles.Keys.ToList();
-         var clusters = new List<FolderCluster>();
-         var folderToCluster = new Dictionary<string, FolderCluster>(StringComparer.OrdinalIgnoreCase);
-
-         // Build clusters by merging folder pairs with shared files
-         foreach (var (a, b) in pairs)
-         {
-            if (!folderToCluster.TryGetValue(a, out var ca) && !folderToCluster.TryGetValue(b, out var cb))
-            {
-               var cluster = new FolderCluster { Master = a };
-               cluster.Members.Add(a);
-               if (a != b) cluster.Members.Add(b);
-               folderToCluster[a] = cluster;
-               folderToCluster[b] = cluster;
-               clusters.Add(cluster);
-            }
-            else if (folderToCluster.TryGetValue(a, out ca) && !folderToCluster.ContainsKey(b))
-            {
-               ca.Members.Add(b);
-               folderToCluster[b] = ca;
-            }
-            else if (!folderToCluster.ContainsKey(a) && folderToCluster.TryGetValue(b, out cb))
-            {
-               cb.Members.Add(a);
-               folderToCluster[a] = cb;
-            }
-            else if (folderToCluster[a] != folderToCluster[b])
-            {
-               var caMembers = folderToCluster[a].Members;
-               var cbMembers = folderToCluster[b].Members;
-               caMembers.AddRange(cbMembers);
-               foreach (var f in cbMembers) folderToCluster[f] = folderToCluster[a];
-               clusters.Remove(folderToCluster[b]);
-            }
-         }
-
-         Dispatcher.Invoke(() => _scanStatus = $"Computing similarity for {clusters.Count} clusters...");
-
-         // Compute similarity for each cluster (max similarity among all pairs)
-         int processedClusters = 0;
-         foreach (var cluster in clusters)
-         {
-            var pairsInCluster = cluster.Members
-                .SelectMany((a, i) => cluster.Members.Skip(i + 1)
-                .Select(b => (a, b)))
-                .Where(p => p.a != p.b);
-
-            double maxSim = 0;
-            foreach (var (a, b) in pairsInCluster)
-            {
-               var key = a.CompareTo(b) < 0 ? (a, b) : (b, a);
-               int totalA = _folderFileCache.TryGetValue(a, out var filesA) ? filesA.Count : 0;
-               int totalB = _folderFileCache.TryGetValue(b, out var filesB) ? filesB.Count : 0;
-               int confirmed = _confirmedDuplicates.TryGetValue(key, out var c) ? c : 0;
-               if (totalA + totalB > 0)
-               {
-                  double sim = 2.0 * confirmed / (totalA + totalB) * 100.0;
-                  maxSim = Math.Max(maxSim, sim);
-               }
-            }
-            cluster.Similarity = maxSim;
-            processedClusters++;
-            if (processedClusters % 10 == 0)
-            {
-                Dispatcher.Invoke(() => _scanStatus = $"Processed {processedClusters} of {clusters.Count} clusters...");
-            }
-         }
-
-         // Do NOT remove clusters with zero similarity (restore original behavior)
-         // Use the largest folder as master for remaining clusters
-         foreach (var cluster in clusters)
-         {
-            cluster.Master = cluster.Members
-                .OrderByDescending(f => _folderFileCache.TryGetValue(f, out var files) ? files.Count : 0)
-                .FirstOrDefault();
-         }
-
-         Dispatcher.Invoke(() => _scanStatus = $"Found {clusters.Count} folder clusters");
-         // Fallback: if no clusters, show all scanned folders as single-member clusters with 0% similarity
-         if (clusters.Count == 0)
-         {
-            Dispatcher.Invoke(() => _scanStatus = "No similar clusters found. Showing all scanned folders.");
-            foreach (var folder in _scanFolders)
-            {
-               clusters.Add(new FolderCluster
-               {
-                  Master = folder,
-                  Members = new List<string> { folder },
-                  Similarity = 0.0
-               });
-            }
-         }
-         return clusters;
-      }
-
       // ═════════════════════════════ data records ═════════════════════════════
       // Represents a pair of duplicate files
       public sealed record FileMatch(string A, string B);
@@ -919,28 +777,6 @@ namespace FolderDupFinder
             int totalR = Directory.GetFiles(r, "*.*", SearchOption.AllDirectories).Length;
             Similarity = 2.0 * files.Count / (totalL + totalR) * 100.0;
          }
-      }
-
-      // Node for hierarchical folder match tree
-      public sealed class FolderMatchNode
-      {
-         public string Left { get; }
-         public string Right { get; }
-         public double Similarity { get; }
-         public List<FolderMatchNode> Children { get; } = new();
-
-         public FolderMatchNode(FolderMatch f)
-         {
-            Left = f.Left; Right = f.Right; Similarity = f.Similarity;
-         }
-      }
-
-      // Represents a cluster of similar folders (not used in ListView)
-      public class FolderCluster
-      {
-         public string Master { get; set; } = ""; // The master folder path
-         public List<string> Members { get; set; } = new(); // All similar folders
-         public double Similarity { get; set; } // Similarity score for the cluster
       }
 
       // Data structure for saving/loading project state
@@ -1294,6 +1130,7 @@ namespace FolderDupFinder
           txtRightFolderDisplay.Text = "";
           _allFileDetails.Clear();
           _fileDetailCollection.Clear();
+          _filesSortOrder.Clear(); // Clear file sorting as well
           listViewFiles.ItemsSource = null;
           lblFileCount.Text = "0";
       }
@@ -1309,15 +1146,11 @@ namespace FolderDupFinder
           
           // Create a set of duplicate file names for quick lookup
           var duplicateFileNames = new HashSet<string>();
-          var duplicateFileLookup = new Dictionary<string, (string leftPath, string rightPath)>();
           
           foreach (var match in duplicateFiles)
           {
               var leftFileName = Path.GetFileName(match.A);
-              var rightFileName = Path.GetFileName(match.B);
-              
               duplicateFileNames.Add(leftFileName.ToLowerInvariant());
-              duplicateFileLookup[leftFileName.ToLowerInvariant()] = (match.A, match.B);
           }
           
           // Process duplicate files first
@@ -1415,6 +1248,5 @@ namespace FolderDupFinder
          ClearAllSorting();
          statusLabel.Text = "Sorting cleared - showing default order.";
       }
-      // Keep all other existing methods as they are...
    }
 }
