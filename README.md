@@ -11,8 +11,8 @@ See this simplified UI below. No settings, no smart features, just getting you s
 ![Alt text](/Screenshot/Main.jpg?raw=true "Example analysis")
 
 # Important note
-This tool it not designed to manage your back-ups.
-This tool is not intended to find all file duplicates in your back-ups, its focus is to find similar folders that could store the same files (using file name, file size and hash value).
+This tool it not designed to manage your back-ups. This tool is not intended to find all file duplicates in your back-ups. 
+Its focus is finding similar folders that could store the same files (using file name, file size and hash value).
 
 No responsibility taken if you yourself delete the folder with the latest data because it was not shown by the tool.
 
