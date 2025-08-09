@@ -23,6 +23,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Timers;
+using System.Windows.Threading;
 
 namespace FolderDupFinder
 {
@@ -32,16 +33,16 @@ namespace FolderDupFinder
       // List of folders selected by the user for scanning
       private readonly List<string> _scanFolders = new();
       // Cache: maps folder path to its file list
-      private readonly ConcurrentDictionary<string, List<string>> _folderFileCache = new();
+    private readonly ConcurrentDictionary<string, List<string>> _folderFileCache = new(StringComparer.OrdinalIgnoreCase);
       // Cache: maps file path to its SHA256 hash
-      private readonly ConcurrentDictionary<string, string> _fileHashCache = new();
+    private readonly ConcurrentDictionary<string, string> _fileHashCache = new(StringComparer.OrdinalIgnoreCase);
 
       // Structures for tracking potential and confirmed duplicate files between folder pairs
       private readonly Dictionary<(string, string), int> _potentialSharedFiles = new();
       private readonly Dictionary<(string, string), int> _confirmedDuplicates = new();
 
       // Cache for folder info (files, size, count) for quick access
-      private readonly ConcurrentDictionary<string, FolderInfo> _folderInfoCache = new();
+    private readonly ConcurrentDictionary<string, FolderInfo> _folderInfoCache = new(StringComparer.OrdinalIgnoreCase);
 
       // Results: flat representation of folder matches
       private List<FolderMatch> _flatMatches = new();
@@ -70,20 +71,46 @@ namespace FolderDupFinder
       // Observable collection for binding to ListView
       private ObservableCollection<FolderMatch> _folderMatchCollection = new();
 
-      // Enhanced ViewModels and UI state for the new file details panel
+      // Enhanced ViewModels and UI state for the WinMerge-style file details panel
       public class FileDetailViewModel
       {
-          public string FileName { get; set; } = "";
-          public string SizeDisplay { get; set; } = "";
-          public long SizeBytes { get; set; }
-          public string Location { get; set; } = ""; // "Left", "Right", "Both" - renamed from Source/Affinity
-          public string FullPathLeft { get; set; } = ""; // Full path in left folder
-          public string FullPathRight { get; set; } = ""; // Full path in right folder
-          public bool IsUnique { get; set; } // True for unique files, false for duplicates
+          // Left folder file properties
+          public string LeftFileName { get; set; } = "";
+          public string LeftSizeDisplay { get; set; } = "";
+          public long LeftSizeBytes { get; set; } = 0;
+          public string LeftDateDisplay { get; set; } = "";
+          public DateTime? LeftDate { get; set; } = null;
+          public string LeftFullPath { get; set; } = "";
           
-          public string TooltipText => IsUnique ? 
-              (string.IsNullOrEmpty(FullPathLeft) ? FullPathRight : FullPathLeft) :
-              $"Left: {FullPathLeft}\nRight: {FullPathRight}";
+          // Right folder file properties  
+          public string RightFileName { get; set; } = "";
+          public string RightSizeDisplay { get; set; } = "";
+          public long RightSizeBytes { get; set; } = 0;
+          public string RightDateDisplay { get; set; } = "";
+          public DateTime? RightDate { get; set; } = null;
+          public string RightFullPath { get; set; } = "";
+          
+          // Status properties
+          public bool IsDuplicate { get; set; } = false;  // True for files that exist in both folders
+          public bool HasLeftFile => !string.IsNullOrEmpty(LeftFileName);
+          public bool HasRightFile => !string.IsNullOrEmpty(RightFileName);
+          
+          // Primary file name for sorting (use whichever side has the file)
+          public string PrimaryFileName => HasLeftFile ? LeftFileName : RightFileName;
+          
+          // For tooltip - show full path(s) and dates
+          public string TooltipText
+          {
+              get
+              {
+                  if (HasLeftFile && HasRightFile)
+                      return $"Left: {LeftFullPath} ({LeftDateDisplay})\nRight: {RightFullPath} ({RightDateDisplay})";
+                  else if (HasLeftFile)
+                      return $"Left only: {LeftFullPath} ({LeftDateDisplay})";
+                  else
+                      return $"Right only: {RightFullPath} ({RightDateDisplay})";
+              }
+          }
       }
 
       private ObservableCollection<FileDetailViewModel> _fileDetailCollection = new();
@@ -265,7 +292,6 @@ namespace FolderDupFinder
                       catch (OperationCanceledException) { return; }
                       catch (Exception) { /* Skip problematic folders */ }
                   });
-
                   _uiUpdateTimer.Stop();
                   
                   if (cancellationToken.IsCancellationRequested)
@@ -342,6 +368,24 @@ namespace FolderDupFinder
               return;
           }
 
+          // Use all cached subfolders for file comparison - this includes subfolders within each added root folder
+          // The tool should find duplicates between ANY folders, whether from different roots or within the same root
+          // Build comparison folder list strictly from the cache keys to avoid casing/normalization mismatches
+          // Limit to folders under the selected roots to keep scope correct
+          var allSubfolders = _folderFileCache.Keys
+              .Where(k => _scanFolders.Any(root => k.StartsWith(root, StringComparison.OrdinalIgnoreCase)))
+              .Distinct()
+              .ToList();
+
+          // Check if we have enough folders to compare
+          // Even with one root folder, we can compare its subfolders against each other
+          if (allSubfolders.Count < 2)
+          {
+              System.Windows.MessageBox.Show($"Need at least 2 folders to compare. Found {allSubfolders.Count} scanned folder(s).\n\nTip: If you added one root folder, ensure it contains subfolders. The tool finds duplicates between all folders and subfolders, not just between different root folders.");
+              UpdateButtonStates();
+              return;
+          }
+
           // Set up cancellation
           _cancellationTokenSource = new CancellationTokenSource();
           _operationInProgress = true;
@@ -361,14 +405,6 @@ namespace FolderDupFinder
           // Start the UI update timer for file comparison status updates
           _uiUpdateTimer.Start();
           UpdateButtonStates();
-
-          // Use all cached subfolders for file comparison
-          var allSubfolders = _scanFolders
-              .SelectMany(root =>
-                  Directory.GetDirectories(root, "*", SearchOption.AllDirectories).Prepend(root))
-              .Where(subfolder => _folderFileCache.ContainsKey(subfolder))
-              .Distinct()
-              .ToList();
 
           Task.Run(() =>
           {
@@ -400,7 +436,7 @@ namespace FolderDupFinder
               }
               catch (OperationCanceledException)
               {
-                  Dispatcher.Invoke(() => statusLabel.Text = "Comparison cancelled.");
+                  SafeUpdateStatus("Comparison cancelled.");
               }
               finally
               {
@@ -409,8 +445,8 @@ namespace FolderDupFinder
                   _operationInProgress = false;
                   _cancellationTokenSource?.Dispose();
                   _cancellationTokenSource = null;
-                  
-                  Dispatcher.Invoke(() => UpdateButtonStates());
+
+                  SafeUpdateButtons();
               }
           }, cancellationToken);
       }
@@ -455,8 +491,8 @@ namespace FolderDupFinder
                       }
                   });
                   
-                  _scanStatus = $"Populating results: {processedMatches}/{matches.Count} folder matches added...";
-                  
+                  _scanStatus = $"Populating results: {processedMatches:N0}/{matches.Count:N0} folder matches added...";
+
                   // Small delay to allow UI to update
                   if (processedMatches < matches.Count)
                   {
@@ -467,7 +503,9 @@ namespace FolderDupFinder
           
           Dispatcher.Invoke(() =>
           {
-              statusLabel.Text = "Select a group to see details.";
+              statusLabel.Text = matches.Count > 0 ? 
+                  "Select a group to see details." : 
+                  "No duplicate folder groups found. Try lowering filters (Similarity: 0%, Size: 0MB) or check that your folders contain files with the same names and content.";
               mainProgressBar.Value = mainProgressBar.Maximum; // Show 100% completion
           });
       }
@@ -549,7 +587,7 @@ namespace FolderDupFinder
       private List<FileMatch> ComputeFileMatches(System.IProgress<int> prog, List<string> allFolders, CancellationToken cancellationToken = default)
       {
           // Phase 1: Build file index with progress tracking
-          _scanStatus = "Building file index...";
+          _scanStatus = $"Building file index from {allFolders.Count} folders (including subfolders)...";
           _maxProgress = allFolders.Count;
           _currentProgress = 0;
           
@@ -560,7 +598,7 @@ namespace FolderDupFinder
           foreach (var folder in allFolders)
           {
               cancellationToken.ThrowIfCancellationRequested();
-              
+
               foreach (var file in _folderFileCache[folder])
               {
                   var info = new FileInfo(file);
@@ -606,19 +644,51 @@ namespace FolderDupFinder
           
           cancellationToken.ThrowIfCancellationRequested();
           
-          // Phase 3: Group files by name and size
+          // Phase 3: Group files by name and size with progress tracking
           _scanStatus = $"Found {potentialPairs} potential folder pairs. Grouping files...";
           var allFiles = allFolders.SelectMany(f => _folderFileCache[f]).ToList();
+          _maxProgress = allFiles.Count;
+          _currentProgress = 0;
           
-          var dict = allFiles.GroupBy(KeyForFile)
-                            .Where(g => g.Count() > 1)
-                            .ToDictionary(g => g.Key, g => g.ToList());
+          var dict = new Dictionary<string, List<string>>();
+          int processedFiles = 0;
+          
+          foreach (var file in allFiles)
+          {
+              cancellationToken.ThrowIfCancellationRequested();
+              
+              var key = KeyForFile(file);
+              if (!dict.ContainsKey(key)) 
+                  dict[key] = new List<string>();
+              dict[key].Add(file);
+              
+              processedFiles++;
+              _currentProgress = processedFiles;
+              
+              if (processedFiles % 1000 == 0 || processedFiles == allFiles.Count)
+              {
+                  _scanStatus = $"Grouping files: {processedFiles:N0}/{allFiles.Count:N0} files processed...";
+              }
+          }
+          
+          // Filter out groups with only one file (no duplicates)
+          var duplicateGroups = dict.Where(g => g.Value.Count > 1).ToDictionary(g => g.Key, g => g.Value);
           
           cancellationToken.ThrowIfCancellationRequested();
           
+          // Early exit if no potential duplicates found
+          if (duplicateGroups.Count == 0)
+          {
+              _scanStatus = $"No potential duplicate files found. Scanned {dict.Count:N0} unique file types across {allFiles.Count:N0} total files.\n" +
+                           $"For duplicates to be found, folders must contain files with identical names AND sizes.\n" +
+                           $"Debug: Found {fileNameSizeToFolders.Count:N0} unique file name/size combinations across {allFolders.Count} folders.";
+              var emptyResult = new List<FileMatch>();
+              return emptyResult;
+          }
+
           // Phase 4: Hash comparison with progress tracking
-          _scanStatus = $"Comparing {dict.Count} potential duplicate groups...";
-          _maxProgress = dict.Count;
+          _scanStatus = $"Comparing {duplicateGroups.Count:N0} potential duplicate groups...";
+          _maxProgress = duplicateGroups.Count;
           _currentProgress = 0;
 
           var bag = new ConcurrentBag<FileMatch>();
@@ -626,7 +696,7 @@ namespace FolderDupFinder
           _confirmedDuplicates.Clear();
           var duplicatePairs = new ConcurrentDictionary<(string, string), int>();
 
-          Parallel.ForEach(dict.Values, new ParallelOptions { 
+          Parallel.ForEach(duplicateGroups.Values, new ParallelOptions { 
               MaxDegreeOfParallelism = MaxParallelism,
               CancellationToken = cancellationToken 
           }, list =>
@@ -657,9 +727,9 @@ namespace FolderDupFinder
              }
              var currentProcessed = Interlocked.Increment(ref processed);
              _currentProgress = currentProcessed;
-             if (currentProcessed % 10 == 0 || currentProcessed == dict.Count)
+             if (currentProcessed % 10 == 0 || currentProcessed == duplicateGroups.Count)
              {
-                 _scanStatus = $"Processed {currentProcessed} of {dict.Count} groups... ({bag.Count} matches found)";
+                 _scanStatus = $"Processed {currentProcessed:N0} of {duplicateGroups.Count:N0} groups... ({bag.Count:N0} matches found)";
              }
              prog.Report(currentProcessed);
           });
@@ -673,7 +743,18 @@ namespace FolderDupFinder
           }
 
           var result = bag.ToList();
-          _scanStatus = $"Found {result.Count} duplicate files across {_confirmedDuplicates.Count} folder pairs";
+          _scanStatus = $"Found {result.Count:N0} duplicate files across {_confirmedDuplicates.Count:N0} folder pairs";
+          
+          // Add diagnostic information for troubleshooting
+          if (result.Count == 0)
+          {
+              _scanStatus += $" (Processed {duplicateGroups.Count:N0} potential groups, checked {allFiles.Count:N0} total files)";
+          }
+          else if (result.Count > 1000000) // More than 1 million matches
+          {
+              _scanStatus += $" (WARNING: Very large result set may impact performance)";
+          }
+          
           return result;
       }
 
@@ -707,25 +788,40 @@ namespace FolderDupFinder
           _maxProgress = filesList.Count;
           _currentProgress = 0;
           
-          var dict = new Dictionary<(string, string), List<FileMatch>>();
+          // Early exit if no file matches
+          if (filesList.Count == 0)
+          {
+              _scanStatus = "No file matches to aggregate into folder matches";
+              return new List<FolderMatch>();
+          }
+          
+          // Use ConcurrentDictionary for thread-safe aggregation with large datasets
+          var dict = new ConcurrentDictionary<(string, string), ConcurrentBag<FileMatch>>();
           int processedFiles = 0;
           
-          foreach (var m in filesList)
+          // Process in parallel for large datasets
+          var parallelOptions = new ParallelOptions 
+          { 
+              MaxDegreeOfParallelism = MaxParallelism,
+              CancellationToken = cancellationToken 
+          };
+          
+          Parallel.ForEach(filesList, parallelOptions, m =>
           {
               cancellationToken.ThrowIfCancellationRequested();
               
               var key = (Path.GetDirectoryName(m.A) ?? "", Path.GetDirectoryName(m.B) ?? "");
-              if (!dict.ContainsKey(key)) dict[key] = new List<FileMatch>();
-              dict[key].Add(m);
+              var bag = dict.GetOrAdd(key, _ => new ConcurrentBag<FileMatch>());
+              bag.Add(m);
               
-              processedFiles++;
-              _currentProgress = processedFiles;
+              var currentProcessed = Interlocked.Increment(ref processedFiles);
+              _currentProgress = currentProcessed;
               
-              if (processedFiles % 100 == 0 || processedFiles == filesList.Count)
+              if (currentProcessed % 10000 == 0 || currentProcessed == filesList.Count)
               {
-                  _scanStatus = $"Aggregating matches: {processedFiles}/{filesList.Count} files processed...";
+                  _scanStatus = $"Aggregating matches: {currentProcessed:N0}/{filesList.Count:N0} files processed...";
               }
-          }
+          });
           
           _scanStatus = "Building folder match objects...";
           var folderPairs = dict.Keys.ToList();
@@ -738,8 +834,12 @@ namespace FolderDupFinder
           foreach (var kvp in dict)
           {
               cancellationToken.ThrowIfCancellationRequested();
-              
-              var folderMatch = new FolderMatch(kvp.Key.Item1, kvp.Key.Item2, kvp.Value);
+              // Compute direct file counts from the cache to avoid cross-thread UI access
+              int totalL = 0, totalR = 0;
+              if (_folderFileCache.TryGetValue(kvp.Key.Item1, out var lFiles)) totalL = lFiles.Count;
+              if (_folderFileCache.TryGetValue(kvp.Key.Item2, out var rFiles)) totalR = rFiles.Count;
+
+              var folderMatch = new FolderMatch(kvp.Key.Item1, kvp.Key.Item2, kvp.Value.ToList(), totalL, totalR);
               result.Add(folderMatch);
               
               processedPairs++;
@@ -747,11 +847,22 @@ namespace FolderDupFinder
               
               if (processedPairs % 50 == 0 || processedPairs == folderPairs.Count)
               {
-                  _scanStatus = $"Creating folder matches: {processedPairs}/{folderPairs.Count} pairs processed...";
+                  _scanStatus = $"Creating folder matches: {processedPairs:N0}/{folderPairs.Count:N0} pairs processed...";
               }
           }
 
-          _scanStatus = $"Built {result.Count} folder matches from {filesList.Count} file matches";
+          _scanStatus = $"Built {result.Count:N0} folder matches from {filesList.Count:N0} file matches";
+          
+          // Add diagnostic information for troubleshooting
+          if (result.Count == 0 && filesList.Count > 0)
+          {
+              _scanStatus += " (File matches found but no folder pairs created - check folder structure)";
+          }
+          else if (result.Count == 0)
+          {
+              _scanStatus += " (No duplicate files found to aggregate into folder matches)";
+          }
+          
           return result;
       }
 
@@ -760,24 +871,23 @@ namespace FolderDupFinder
       public sealed record FileMatch(string A, string B);
 
       // Represents a pair of folders with their duplicate files and similarity
-      public sealed class FolderMatch
-      {
-         public string Left { get; }
-         public string Right { get; }
-         public List<FileMatch> Files { get; }
-         public double Similarity { get; }
-         public string FolderName => Path.GetFileName(Left.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-         public string SizeDisplay => MainWindow.FormatSize(MainWindow.GetFolderSizeStatic(Left));
-         public long SizeBytes => MainWindow.GetFolderSizeStatic(Left);
+        public sealed class FolderMatch
+        {
+            public string Left { get; }
+            public string Right { get; }
+            public List<FileMatch> Files { get; }
+            public double Similarity { get; }
+            public string FolderName => Path.GetFileName(Left.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            public string SizeDisplay => FormatSize(GetFolderSizeStatic(Left));
+            public long SizeBytes => GetFolderSizeStatic(Left);
 
-         public FolderMatch(string l, string r, List<FileMatch> files)
-         {
-            Left = l; Right = r; Files = files;
-            int totalL = Directory.GetFiles(l, "*.*", SearchOption.AllDirectories).Length;
-            int totalR = Directory.GetFiles(r, "*.*", SearchOption.AllDirectories).Length;
-            Similarity = 2.0 * files.Count / (totalL + totalR) * 100.0;
-         }
-      }
+            public FolderMatch(string l, string r, List<FileMatch> files, int totalL, int totalR)
+            {
+                Left = l; Right = r; Files = files;
+                // Calculate similarity based on direct files only (TopDirectoryOnly), matching detection scope
+                Similarity = totalL + totalR > 0 ? (2.0 * files.Count / (totalL + totalR) * 100.0) : 0.0;
+            }
+        }
 
       // Data structure for saving/loading project state
       public sealed class ProjectData
@@ -804,6 +914,36 @@ namespace FolderDupFinder
          return $"{size} B";
       }
 
+      private static string FormatDate(DateTime date)
+      {
+         // Format as "yyyy-MM-dd HH:mm" for consistent display
+         return date.ToString("yyyy-MM-dd HH:mm");
+      }
+
+      // Gets the latest modification date from all files in a folder
+      private DateTime? GetFolderLatestDate(string folderPath)
+      {
+         if (!_folderFileCache.TryGetValue(folderPath, out var files) || files.Count == 0)
+            return null;
+            
+         DateTime? latestDate = null;
+         foreach (var file in files)
+         {
+            try
+            {
+               var fileInfo = new FileInfo(file);
+               if (!latestDate.HasValue || fileInfo.LastWriteTime > latestDate.Value)
+                  latestDate = fileInfo.LastWriteTime;
+            }
+            catch
+            {
+               // Skip files that can't be accessed
+               continue;
+            }
+         }
+         return latestDate;
+      }
+
       private static long GetFolderSizeStatic(string folder)
       {
          var instance = System.Windows.Application.Current.MainWindow as MainWindow;
@@ -823,6 +963,8 @@ namespace FolderDupFinder
          string property = headerText switch
          {
             "Similarity (%)" => "Similarity",
+            "Similarity %" => "Similarity",  // Updated for new header
+            "Sim%" => "Similarity",          // Keep for backward compatibility
             "Size" => "SizeBytes",
             "Folder Name" => "FolderName",
             "Master Folder" => "Left",
@@ -878,7 +1020,7 @@ namespace FolderDupFinder
          UpdateColumnHeaderSortIndicators();
       }
 
-      // Enhanced multi-column sorting for file details ListView
+      // Enhanced multi-column sorting for file details ListView (WinMerge-style)
       private void FileListGridViewColumnHeader_Click(object sender, System.Windows.RoutedEventArgs e)
       {
          if (listViewFiles.ItemsSource == null) return;
@@ -888,9 +1030,15 @@ namespace FolderDupFinder
 
          string property = headerText switch
          {
-            "File Name" => "FileName",
-            "Size" => "SizeBytes",
-            "Location" => "Location",
+            "Left File Name" => "LeftFileName",
+            "← File Name" => "LeftFileName",    // Updated for new arrow headers
+            "Left Size" => "LeftSizeBytes",
+            "← Size" => "LeftSizeBytes",        // Updated for new arrow headers
+            "Right File Name" => "RightFileName",
+            "→ File Name" => "RightFileName",   // Updated for new arrow headers
+            "Right Size" => "RightSizeBytes",
+            "→ Size" => "RightSizeBytes",       // Updated for new arrow headers
+            "File Name" => "PrimaryFileName", // Fallback for compatibility
             _ => headerText
          };
 
@@ -984,6 +1132,8 @@ namespace FolderDupFinder
                string property = headerText switch
                {
                   "Similarity (%)" => "Similarity",
+                  "Similarity %" => "Similarity",  // Updated for new header
+                  "Sim%" => "Similarity",         // Updated for backward compatibility
                   "Size" => "SizeBytes", 
                   "Folder Name" => "FolderName",
                   "Master Folder" => "Left",
@@ -1013,7 +1163,7 @@ namespace FolderDupFinder
          }
       }
 
-      // Updates file list column headers with sort indicators
+      // Updates file list column headers with sort indicators (WinMerge-style)
       private void UpdateFileListColumnHeaders()
       {
          if (listViewFiles.View is not GridView gridView) return;
@@ -1024,9 +1174,15 @@ namespace FolderDupFinder
             {
                string property = headerText switch
                {
-                  "File Name" => "FileName",
-                  "Size" => "SizeBytes",
-                  "Location" => "Location",
+                  "Left File Name" => "LeftFileName",
+                  "← File Name" => "LeftFileName",
+                   "Left Size" => "LeftSizeBytes",
+                  "← Size" => "LeftSizeBytes",
+                  "Right File Name" => "RightFileName", 
+                  "→ File Name" => "RightFileName",
+                  "Right Size" => "RightSizeBytes",
+                  "→ Size" => "RightSizeBytes",
+                  "File Name" => "PrimaryFileName", // Fallback
                   _ => headerText
                };
 
@@ -1037,15 +1193,27 @@ namespace FolderDupFinder
                   string arrow = sortInfo.Direction == ListSortDirection.Ascending ? " ↑" : " ↓";
                   string priority = _filesSortOrder.Count > 1 ? $" ({sortInfo.Priority})" : "";
                   
-                  // Update header text with indicators
+                  // Update header text with indicators while preserving original header text
                   string baseHeader = headerText.Split(' ')[0];
-                  if (headerText.Contains("Name")) baseHeader = "File Name";
+                  if (headerText.Contains("File Name")) 
+                     baseHeader = headerText.Contains("Left") ? "Left File Name" : 
+                                 headerText.Contains("Right") ? "Right File Name" : "File Name";
+                  else if (headerText.Contains("Size"))
+                     baseHeader = headerText.Contains("Left") ? "Left Size" : "Right Size";
+                  
                   column.Header = baseHeader + arrow + priority;
                }
                else
                {
                   // Column is not sorted - restore original header
-                  column.Header = headerText.Split(' ')[0] == "File" ? "File Name" : headerText.Split(' ')[0];
+                  column.Header = headerText.Split(' ')[0] switch
+                  {
+                     "Left" when headerText.Contains("File") => "Left File Name",
+                     "Left" when headerText.Contains("Size") => "Left Size", 
+                     "Right" when headerText.Contains("File") => "Right File Name",
+                     "Right" when headerText.Contains("Size") => "Right Size",
+                     _ => headerText.Split(' ')[0]
+                  };
                }
             }
          }
@@ -1108,9 +1276,15 @@ namespace FolderDupFinder
           
           if (string.IsNullOrEmpty(leftFolder) || string.IsNullOrEmpty(rightFolder) || duplicateFiles == null) return;
 
-          // Update folder path text displays
-          txtLeftFolderDisplay.Text = leftFolder;
-          txtRightFolderDisplay.Text = rightFolder;
+          // Get latest modification dates for folders
+          var leftDate = GetFolderLatestDate(leftFolder);
+          var rightDate = GetFolderLatestDate(rightFolder);
+          
+          // Update folder path text displays with dates
+          txtLeftFolderDisplay.Text = leftDate.HasValue ? 
+              $"{leftFolder} ({FormatDate(leftDate.Value)})" : leftFolder;
+          txtRightFolderDisplay.Text = rightDate.HasValue ? 
+              $"{rightFolder} ({FormatDate(rightDate.Value)})" : rightFolder;
           
           // Build comprehensive file list
           BuildFileDetailsList(leftFolder, rightFolder, duplicateFiles);
@@ -1135,7 +1309,7 @@ namespace FolderDupFinder
           lblFileCount.Text = "0";
       }
 
-      // Builds the comprehensive file details list for the selected folder pair
+      // Builds the comprehensive file details list for the selected folder pair (WinMerge-style)
       private void BuildFileDetailsList(string leftFolder, string rightFolder, List<FileMatch> duplicateFiles)
       {
           _allFileDetails.Clear();
@@ -1144,93 +1318,78 @@ namespace FolderDupFinder
           var leftFiles = _folderFileCache.TryGetValue(leftFolder, out var leftList) ? leftList : new List<string>();
           var rightFiles = _folderFileCache.TryGetValue(rightFolder, out var rightList) ? rightList : new List<string>();
           
-          // Create a set of duplicate file names for quick lookup
-          var duplicateFileNames = new HashSet<string>();
-          
+          // Create lookup for duplicate files by file name
+          var duplicateFileMap = new Dictionary<string, FileMatch>();
           foreach (var match in duplicateFiles)
           {
-              var leftFileName = Path.GetFileName(match.A);
-              duplicateFileNames.Add(leftFileName.ToLowerInvariant());
+              var fileName = Path.GetFileName(match.A).ToLowerInvariant();
+              duplicateFileMap[fileName] = match;
           }
           
-          // Process duplicate files first
-          foreach (var match in duplicateFiles)
+          // Get all unique file names from both folders
+          var allFileNames = new HashSet<string>();
+          foreach (var file in leftFiles)
+              allFileNames.Add(Path.GetFileName(file).ToLowerInvariant());
+          foreach (var file in rightFiles)  
+              allFileNames.Add(Path.GetFileName(file).ToLowerInvariant());
+          
+          // Build file details for each unique file name
+          foreach (var fileName in allFileNames.OrderBy(f => f))
           {
-              var fileName = Path.GetFileName(match.A);
-              var fileInfo = new FileInfo(match.A);
+              var leftFile = leftFiles.FirstOrDefault(f => Path.GetFileName(f).Equals(fileName, StringComparison.OrdinalIgnoreCase));
+              var rightFile = rightFiles.FirstOrDefault(f => Path.GetFileName(f).Equals(fileName, StringComparison.OrdinalIgnoreCase));
               
-              _allFileDetails.Add(new FileDetailViewModel
+              var isDuplicate = duplicateFileMap.ContainsKey(fileName);
+              
+              var fileDetail = new FileDetailViewModel
               {
-                  FileName = fileName,
-                  SizeDisplay = FormatSize(fileInfo.Length),
-                  SizeBytes = fileInfo.Length,
-                  Location = "Both",
-                  FullPathLeft = match.A,
-                  FullPathRight = match.B,
-                  IsUnique = false
-              });
-          }
-          
-          // Process unique files from left folder
-          foreach (var filePath in leftFiles)
-          {
-              var fileName = Path.GetFileName(filePath);
-              if (!duplicateFileNames.Contains(fileName.ToLowerInvariant()))
+                  IsDuplicate = isDuplicate
+              };
+              
+              // Populate left folder file info
+              if (leftFile != null)
               {
-                  var fileInfo = new FileInfo(filePath);
-                  _allFileDetails.Add(new FileDetailViewModel
-                  {
-                      FileName = fileName,
-                      SizeDisplay = FormatSize(fileInfo.Length),
-                      SizeBytes = fileInfo.Length,
-                      Location = "Left",
-                      FullPathLeft = filePath,
-                      FullPathRight = "",
-                      IsUnique = true
-                  });
+                  var leftInfo = new FileInfo(leftFile);
+                  fileDetail.LeftFileName = Path.GetFileName(leftFile);
+                  fileDetail.LeftSizeDisplay = FormatSize(leftInfo.Length);
+                  fileDetail.LeftSizeBytes = leftInfo.Length;
+                  fileDetail.LeftDateDisplay = FormatDate(leftInfo.LastWriteTime);
+                  fileDetail.LeftDate = leftInfo.LastWriteTime;
+                  fileDetail.LeftFullPath = leftFile;
               }
-          }
-          
-          // Process unique files from right folder
-          foreach (var filePath in rightFiles)
-          {
-              var fileName = Path.GetFileName(filePath);
-              if (!duplicateFileNames.Contains(fileName.ToLowerInvariant()))
+              
+              // Populate right folder file info  
+              if (rightFile != null)
               {
-                  var fileInfo = new FileInfo(filePath);
-                  _allFileDetails.Add(new FileDetailViewModel
-                  {
-                      FileName = fileName,
-                      SizeDisplay = FormatSize(fileInfo.Length),
-                      SizeBytes = fileInfo.Length,
-                      Location = "Right",
-                      FullPathLeft = "",
-                      FullPathRight = filePath,
-                      IsUnique = true
-                  });
+                  var rightInfo = new FileInfo(rightFile);
+                  fileDetail.RightFileName = Path.GetFileName(rightFile);
+                  fileDetail.RightSizeDisplay = FormatSize(rightInfo.Length);
+                  fileDetail.RightSizeBytes = rightInfo.Length;
+                  fileDetail.RightDateDisplay = FormatDate(rightInfo.LastWriteTime);
+                  fileDetail.RightDate = rightInfo.LastWriteTime;
+                  fileDetail.RightFullPath = rightFile;
               }
+              
+              _allFileDetails.Add(fileDetail);
           }
-          
-          // Sort files by name
-          _allFileDetails = _allFileDetails.OrderBy(f => f.FileName).ToList();
           
           // Apply current filter
           FilterFileDetails();
       }
 
-      // Filters the file details based on the current settings
+      // Filters the file details based on the current settings (WinMerge-style)
       private void FilterFileDetails()
       {
           var filteredFiles = _showUniqueFiles ? 
               _allFileDetails : 
-              _allFileDetails.Where(f => !f.IsUnique).ToList();
+              _allFileDetails.Where(f => f.IsDuplicate).ToList();
           
           _fileDetailCollection = new ObservableCollection<FileDetailViewModel>(filteredFiles);
           listViewFiles.ItemsSource = _fileDetailCollection;
           
           // Update file count
-          var duplicateCount = _allFileDetails.Count(f => !f.IsUnique);
-          var uniqueCount = _allFileDetails.Count(f => f.IsUnique);
+          var duplicateCount = _allFileDetails.Count(f => f.IsDuplicate);
+          var uniqueCount = _allFileDetails.Count(f => !f.IsDuplicate);
           
           if (_showUniqueFiles)
           {
@@ -1248,5 +1407,37 @@ namespace FolderDupFinder
          ClearAllSorting();
          statusLabel.Text = "Sorting cleared - showing default order.";
       }
+
+      // Handler for Clear File Sort button - resets file sorting to default
+      private void ClearFileSort_Click(object sender, System.Windows.RoutedEventArgs e)
+      {
+         _filesSortOrder.Clear();
+         ApplyFileListSorting();
+         UpdateFileListColumnHeaders();
+         statusLabel.Text = "File sorting cleared - showing default order.";
+      }
+
+        // Safely update UI elements from background threads, tolerant to dispatcher cancellation/shutdown
+        private void SafeUpdateStatus(string text)
+        {
+            try
+            {
+                if (!Dispatcher.HasShutdownStarted && !Dispatcher.HasShutdownFinished)
+                    Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() => statusLabel.Text = text));
+            }
+            catch (TaskCanceledException) { /* Ignore during app shutdown/cancellation */ }
+            catch (InvalidOperationException) { /* Dispatcher unavailable */ }
+        }
+
+        private void SafeUpdateButtons()
+        {
+            try
+            {
+                if (!Dispatcher.HasShutdownStarted && !Dispatcher.HasShutdownFinished)
+                    Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(UpdateButtonStates));
+            }
+            catch (TaskCanceledException) { }
+            catch (InvalidOperationException) { }
+        }
    }
 }

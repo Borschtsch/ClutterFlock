@@ -1,0 +1,26 @@
+{
+  "$schema": "vscode://schemas/launch",
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": ".NET Core Launch (Debug)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build (Debug)",
+      "program": "${workspaceFolder}/bin/Debug/net9.0-windows10.0.26100.0/FolderDupFinder.exe",
+      "cwd": "${workspaceFolder}",
+      "console": "internalConsole",
+      "stopAtEntry": false
+    },
+    {
+      "name": ".NET Core Launch (Release)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build (Release)",
+      "program": "${workspaceFolder}/bin/Release/net9.0-windows10.0.26100.0/FolderDupFinder.exe",
+      "cwd": "${workspaceFolder}",
+      "console": "internalConsole",
+      "stopAtEntry": false
+    }
+  ]
+}

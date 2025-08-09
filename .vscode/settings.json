@@ -1,0 +1,9 @@
+{
+  "dotnet.defaultSolution": "${workspaceFolder}/FolderDupFinder.sln",
+  "files.exclude": {
+    "**/bin": true,
+    "**/obj": true
+  },
+  "terminal.integrated.defaultProfile.windows": "PowerShell",
+  "csharp.suppressDotnetRestoreNotification": true
+}

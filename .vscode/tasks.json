@@ -1,0 +1,87 @@
+{
+  "$schema": "vscode://schemas/tasks",
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "restore",
+      "type": "shell",
+      "command": "dotnet",
+      "args": ["restore", "${workspaceFolder}/FolderDupFinder.csproj"],
+      "group": "build",
+      "problemMatcher": ["$msCompile"]
+    },
+    {
+      "label": "build (Debug)",
+      "type": "shell",
+      "command": "dotnet",
+      "args": [
+        "build",
+        "${workspaceFolder}/FolderDupFinder.csproj",
+        "-c",
+        "Debug",
+        "/consoleloggerparameters:Summary"
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": ["$msCompile"],
+      "dependsOn": ["restore"]
+    },
+    {
+      "label": "build (Release)",
+      "type": "shell",
+      "command": "dotnet",
+      "args": [
+        "build",
+        "${workspaceFolder}/FolderDupFinder.csproj",
+        "-c",
+        "Release",
+        "/consoleloggerparameters:Summary"
+      ],
+      "group": "build",
+      "problemMatcher": ["$msCompile"],
+      "dependsOn": ["restore"]
+    },
+    {
+      "label": "clean",
+      "type": "shell",
+      "command": "dotnet",
+      "args": ["clean", "${workspaceFolder}/FolderDupFinder.csproj"],
+      "group": "build",
+      "problemMatcher": ["$msCompile"]
+    },
+    {
+      "label": "run (Debug)",
+      "type": "shell",
+      "command": "dotnet",
+      "args": [
+        "run",
+        "--project",
+        "${workspaceFolder}/FolderDupFinder.csproj",
+        "-c",
+        "Debug"
+      ],
+      "isBackground": false,
+      "problemMatcher": ["$msCompile"],
+      "dependsOn": ["build (Debug)"]
+    },
+    {
+      "label": "publish (Release, win-x64)",
+      "type": "shell",
+      "command": "dotnet",
+      "args": [
+        "publish",
+        "${workspaceFolder}/FolderDupFinder.csproj",
+        "-c",
+        "Release",
+        "-r",
+        "win-x64",
+        "--self-contained",
+        "false",
+        "/p:PublishSingleFile=false"
+      ],
+      "problemMatcher": ["$msCompile"]
+    }
+  ]
+}
