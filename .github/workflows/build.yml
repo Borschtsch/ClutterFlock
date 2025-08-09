@@ -1,0 +1,80 @@
+name: build-and-release
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.sln', '**/*.csproj', '**/global.json') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Restore
+        run: dotnet restore "${{ github.workspace }}\FolderDupFinder.csproj"
+
+      - name: Build (Release)
+        run: dotnet build "${{ github.workspace }}\FolderDupFinder.csproj" -c Release /p:ContinuousIntegrationBuild=true /consoleloggerparameters:Summary
+
+      - name: Publish (Release, win-x64)
+        run: |
+          dotnet publish "${{ github.workspace }}\FolderDupFinder.csproj" -c Release -r win-x64 --self-contained false /p:PublishSingleFile=false
+
+      - name: Prepare ZIP artifact
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $publishDir = Join-Path (Resolve-Path .) 'bin/Release/net9.0-windows10.0.26100.0/win-x64/publish'
+          if (-not (Test-Path $publishDir)) { throw "Publish directory not found: $publishDir" }
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          $zipPath = "out/FolderDupFinder-win-x64.zip"
+          if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+          Compress-Archive -Path "$publishDir/*" -DestinationPath $zipPath
+          Write-Host "Created $zipPath"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FolderDupFinder-win-x64
+          path: out/FolderDupFinder-win-x64.zip
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: windows-latest
+    steps:
+      - name: Download built artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: FolderDupFinder-win-x64
+          path: out
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          files: |
+            out/FolderDupFinder-win-x64.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
