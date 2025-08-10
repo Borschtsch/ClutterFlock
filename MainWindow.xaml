@@ -83,7 +83,10 @@
                 </WrapPanel>
 
                 <!-- Compact Results List -->
-                <ctrl:ListView x:Name="listViewFolderMatches" Grid.Row="1" SelectionChanged="listViewFolderMatches_SelectionChanged" FontSize="11">
+                <ctrl:ListView x:Name="listViewFolderMatches" Grid.Row="1" SelectionChanged="listViewFolderMatches_SelectionChanged" FontSize="11"
+                               VirtualizingPanel.IsVirtualizing="True"
+                               VirtualizingPanel.VirtualizationMode="Recycling"
+                               ScrollViewer.CanContentScroll="True">
                     <ctrl:ListView.View>
                         <ctrl:GridView>
                             <ctrl:GridViewColumn Header="Master Folder" DisplayMemberBinding="{Binding Left}" Width="280"/>
@@ -152,7 +155,10 @@
                     </WrapPanel>
                     
                     <!-- Enhanced Files ListView - Maximum space utilization -->
-                    <ctrl:ListView x:Name="listViewFiles" Grid.Row="2" Margin="3" FontSize="10">
+                    <ctrl:ListView x:Name="listViewFiles" Grid.Row="2" Margin="3" FontSize="10"
+                                    VirtualizingPanel.IsVirtualizing="True"
+                                    VirtualizingPanel.VirtualizationMode="Recycling"
+                                    ScrollViewer.CanContentScroll="True">
                         <ctrl:ListView.View>
                             <ctrl:GridView>
                                 <!-- Left Folder Columns -->

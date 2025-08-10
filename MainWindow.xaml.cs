@@ -24,6 +24,7 @@ using System.Windows.Controls;
 using System.Windows.Data;
 using System.Timers;
 using System.Windows.Threading;
+using System.Windows.Media;
 
 namespace FolderDupFinder
 {
@@ -57,6 +58,8 @@ namespace FolderDupFinder
       private int _currentProgress = 0;
       private int _maxProgress = 1;
       private bool _isFileComparisonMode = false;
+    // True while results ListView is being populated progressively
+    private bool _isPopulatingResults = false;
 
       // Cancellation support
       private CancellationTokenSource? _cancellationTokenSource;
@@ -130,6 +133,8 @@ namespace FolderDupFinder
       public MainWindow()
       {
          InitializeComponent();
+         // Set static reference for thread-safe access
+         _staticFolderInfoCache = _folderInfoCache;
          // Timer for batching UI updates (progress/status)
          _uiUpdateTimer = new System.Timers.Timer(200); // 200ms batching
          _uiUpdateTimer.Elapsed += (s, e) =>
@@ -166,6 +171,8 @@ namespace FolderDupFinder
          if (btnRunComparison != null) btnRunComparison.IsEnabled = hasFolders && !analysisActive;
          if (btnSaveProject != null) btnSaveProject.IsEnabled = hasFolders && !analysisActive;
          if (btnLoadProject != null) btnLoadProject.IsEnabled = !analysisActive;
+         if (btnApplyFilters != null) btnApplyFilters.IsEnabled = !_isPopulatingResults && !analysisActive && _flatMatches.Count > 0;
+         if (btnClearSort != null) btnClearSort.IsEnabled = !_isPopulatingResults && !analysisActive;
          if (btnCancel != null) 
          {
              btnCancel.IsEnabled = analysisActive;
@@ -406,6 +413,9 @@ namespace FolderDupFinder
           _uiUpdateTimer.Start();
           UpdateButtonStates();
 
+          // Capture current filter thresholds on the UI thread for initial display
+          var initialThresholds = GetCurrentFilterThresholds();
+
           Task.Run(() =>
           {
               try
@@ -418,7 +428,7 @@ namespace FolderDupFinder
                   
                   if (cancellationToken.IsCancellationRequested)
                   {
-                      Dispatcher.Invoke(() => statusLabel.Text = "Comparison cancelled.");
+                      SafeUpdateStatus("Comparison cancelled.");
                       return;
                   }
                   
@@ -427,12 +437,15 @@ namespace FolderDupFinder
                   
                   if (cancellationToken.IsCancellationRequested)
                   {
-                      Dispatcher.Invoke(() => statusLabel.Text = "Comparison cancelled.");
+                      SafeUpdateStatus("Comparison cancelled.");
                       return;
                   }
                   
-                  // Populate ListView progressively with progress tracking
-                  PopulateListViewWithProgress(_flatMatches, cancellationToken);
+                  // Apply default filters automatically for the initial display (captured from UI thread)
+                  var (minSim, minSize) = initialThresholds;
+                  var initial = _flatMatches.Where(f => f.Similarity >= minSim && f.SizeBytes >= minSize).ToList();
+                  // Populate ListView progressively with progress tracking using the initial filtered set
+                  PopulateListViewWithProgress(initial, cancellationToken);
               }
               catch (OperationCanceledException)
               {
@@ -451,9 +464,33 @@ namespace FolderDupFinder
           }, cancellationToken);
       }
 
+      // Reads current filter thresholds from the UI with safe defaults
+      private (double minSimilarity, long minSizeBytes) GetCurrentFilterThresholds()
+      {
+          // Must be called on UI thread - caller's responsibility
+          if (!Dispatcher.CheckAccess())
+              throw new InvalidOperationException("GetCurrentFilterThresholds must be called on UI thread");
+
+          string simText = txtMinSimilarity?.Text ?? "";
+          string sizeText = txtMinSize?.Text ?? "";
+
+          double minSimilarity;
+          if (!double.TryParse(simText, out minSimilarity))
+              minSimilarity = 50; // default
+
+          double minSizeMb;
+          if (!double.TryParse(sizeText, out minSizeMb))
+              minSizeMb = 1; // default
+
+          long minSizeBytes = (long)(minSizeMb * 1024 * 1024);
+          return (minSimilarity, minSizeBytes);
+      }
+
       // Populates the ListView with folder matches progressively, showing progress updates
       private void PopulateListViewWithProgress(List<FolderMatch> matches, CancellationToken cancellationToken = default)
       {
+          _isPopulatingResults = true;
+          Dispatcher.Invoke(UpdateButtonStates);
           _scanStatus = "Populating results view...";
           _maxProgress = matches.Count;
           _currentProgress = 0;
@@ -463,52 +500,71 @@ namespace FolderDupFinder
           {
               _folderMatchCollection.Clear();
               listViewFolderMatches.ItemsSource = _folderMatchCollection;
+              // Temporarily disable interactions and sorting for stability and speed
+              listViewFolderMatches.IsEnabled = false;
+              var view = CollectionViewSource.GetDefaultView(listViewFolderMatches.ItemsSource);
+              view.SortDescriptions.Clear();
+              // Keep user's sort preferences to restore later
+              _savedSortOrderDuringPopulate = _sortOrder.ToList();
+              _sortOrder.Clear();
           });
           
           int processedMatches = 0;
-          const int batchSize = 50; // Add items in batches for better performance
+          const int batchSize = 500; // Larger batches for faster population
           var batch = new List<FolderMatch>();
-          
-          foreach (var match in matches)
+          try
           {
-              cancellationToken.ThrowIfCancellationRequested();
-              
-              batch.Add(match);
-              processedMatches++;
-              _currentProgress = processedMatches;
-              
-              // Update UI in batches for better performance
-              if (batch.Count >= batchSize || processedMatches == matches.Count)
+              foreach (var match in matches)
               {
-                  var currentBatch = batch.ToList(); // Copy for thread safety
-                  batch.Clear();
+                  cancellationToken.ThrowIfCancellationRequested();
                   
-                  Dispatcher.Invoke(() =>
+                  batch.Add(match);
+                  processedMatches++;
+                  _currentProgress = processedMatches;
+                  
+                  // Update UI in batches for better performance
+                  if (batch.Count >= batchSize || processedMatches == matches.Count)
                   {
-                      foreach (var item in currentBatch)
+                      var currentBatch = batch.ToList(); // Copy for thread safety
+                      batch.Clear();
+                      
+                      // Use BeginInvoke to let UI coalesce work
+                      Dispatcher.BeginInvoke(new Action(() =>
                       {
-                          _folderMatchCollection.Add(item);
-                      }
-                  });
-                  
-                  _scanStatus = $"Populating results: {processedMatches:N0}/{matches.Count:N0} folder matches added...";
-
-                  // Small delay to allow UI to update
-                  if (processedMatches < matches.Count)
-                  {
-                      Thread.Sleep(10);
+                          foreach (var item in currentBatch)
+                              _folderMatchCollection.Add(item);
+                      }), DispatcherPriority.Background);
+                      
+                      _scanStatus = $"Populating results: {processedMatches:N0}/{matches.Count:N0} folder matches added...";
                   }
               }
+          }
+          catch (OperationCanceledException)
+          {
+              // Swallow and let caller update status; just ensure state resets in finally
           }
           
           Dispatcher.Invoke(() =>
           {
+              // Restore sorting and re-enable interactions now that population is complete
+              _sortOrder.Clear();
+              foreach (var s in _savedSortOrderDuringPopulate)
+                  _sortOrder.Add(s);
+              ApplySortingToView();
+              UpdateColumnHeaderSortIndicators();
+              listViewFolderMatches.IsEnabled = true;
               statusLabel.Text = matches.Count > 0 ? 
                   "Select a group to see details." : 
                   "No duplicate folder groups found. Try lowering filters (Similarity: 0%, Size: 0MB) or check that your folders contain files with the same names and content.";
               mainProgressBar.Value = mainProgressBar.Maximum; // Show 100% completion
           });
+
+          _isPopulatingResults = false;
+          Dispatcher.Invoke(UpdateButtonStates);
       }
+
+    // Holds the user's sort during population
+    private List<(string Property, ListSortDirection Direction, int Priority)> _savedSortOrderDuringPopulate = new();
 
       // Handler for Cancel button: cancels the current operation
       private void Cancel_Click(object sender, System.Windows.RoutedEventArgs e)
@@ -946,15 +1002,22 @@ namespace FolderDupFinder
 
       private static long GetFolderSizeStatic(string folder)
       {
-         var instance = System.Windows.Application.Current.MainWindow as MainWindow;
-         if (instance != null && instance._folderInfoCache.TryGetValue(folder, out var info))
-            return info.TotalSize;
-         return 0;
+         // Avoid cross-thread access to Application.Current.MainWindow
+         // Use a static cache reference instead
+         return _staticFolderInfoCache?.TryGetValue(folder, out var info) == true ? info.TotalSize : 0;
       }
+
+      // Static reference to cache for thread-safe access
+      private static ConcurrentDictionary<string, FolderInfo>? _staticFolderInfoCache;
 
       // Enhanced multi-column sorting with visual feedback and Ctrl+Click support
       private void GridViewColumnHeader_Click(object sender, System.Windows.RoutedEventArgs e)
       {
+         if (_isPopulatingResults) 
+         { 
+             SafeUpdateStatus("Please wait until results finish populating to change sorting."); 
+             return; 
+         }
          if (listViewFolderMatches.ItemsSource == null) return;
          
          var header = e.OriginalSource as GridViewColumnHeader;
@@ -1229,6 +1292,13 @@ namespace FolderDupFinder
 
       private void ApplyFilters_Click(object sender, RoutedEventArgs e)
       {
+         // Prevent filtering while comparison or population is running
+         if (_operationInProgress || _isPopulatingResults)
+         {
+             SafeUpdateStatus("Please wait until the results list is built before applying filters.");
+             return;
+         }
+
          double minSimilarity = 0;
          long minSizeBytes = 0;
          double.TryParse(txtMinSimilarity?.Text, out minSimilarity);
@@ -1237,29 +1307,50 @@ namespace FolderDupFinder
          minSizeBytes = (long)(minSizeMb * 1024 * 1024);
 
          var filtered = _flatMatches.Where(f => f.Similarity >= minSimilarity && f.SizeBytes >= minSizeBytes).ToList();
-         
-         // Use progressive population for filtered results too
-         Task.Run(() =>
+
+         // Replace the ItemsSource quickly without progressive batching for snappy filtering
+         Dispatcher.Invoke(() =>
          {
-             try
+             var previouslySelected = listViewFolderMatches.SelectedItem as FolderMatch;
+             // Capture current scroll offset to restore after rebinding
+             var sv = FindScrollViewer(listViewFolderMatches);
+             double offset = sv?.VerticalOffset ?? 0;
+             _folderMatchCollection = new ObservableCollection<FolderMatch>(filtered);
+             listViewFolderMatches.ItemsSource = _folderMatchCollection;
+             // Re-apply current sorting to the new view
+             ApplySortingToView();
+             UpdateColumnHeaderSortIndicators();
+             // Restore selection and keep it in view if still present
+             if (previouslySelected != null && filtered.Contains(previouslySelected))
              {
-                 _operationInProgress = true;
-                 _isFileComparisonMode = true;
-                 
-                 Dispatcher.Invoke(() => UpdateButtonStates());
-                 
-                 _uiUpdateTimer.Start();
-                 PopulateListViewWithProgress(filtered);
+                 listViewFolderMatches.SelectedItem = previouslySelected;
+                 listViewFolderMatches.ScrollIntoView(previouslySelected);
              }
-             finally
+             // Restore scroll offset after layout pass
+             if (sv != null)
              {
-                 _uiUpdateTimer.Stop();
-                 _isFileComparisonMode = false;
-                 _operationInProgress = false;
-                 
-                 Dispatcher.Invoke(() => UpdateButtonStates());
+                 Dispatcher.BeginInvoke(new Action(() =>
+                 {
+                     try { sv.ScrollToVerticalOffset(Math.Min(offset, sv.ScrollableHeight)); } catch { }
+                 }), DispatcherPriority.Render);
              }
+             statusLabel.Text = $"Filter applied: showing {filtered.Count:N0} groups";
          });
+      }
+
+      // Utility to find the ScrollViewer inside a control
+      private static ScrollViewer? FindScrollViewer(DependencyObject? d)
+      {
+          if (d == null) return null;
+          if (d is ScrollViewer sv) return sv;
+          int count = VisualTreeHelper.GetChildrenCount(d);
+          for (int i = 0; i < count; i++)
+          {
+              var child = VisualTreeHelper.GetChild(d, i);
+              var result = FindScrollViewer(child);
+              if (result != null) return result;
+          }
+          return null;
       }
 
       // Enhanced selection changed handler for the new file details interface
