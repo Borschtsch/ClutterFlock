@@ -1,9 +1,10 @@
-﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
-VisualStudioVersion = 17.13.35825.156 d17.13
+VisualStudioVersion = 17.13.35825.156
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FolderDupFinder", "FolderDupFinder.csproj", "{14C2B718-8A43-4E6B-A280-032635DD6437}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ClutterFlock", "ClutterFlock.csproj", "{14C2B718-8A43-4E6B-A280-032635DD6437}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ClutterFlock.Tests", "ClutterFlock.Tests\ClutterFlock.Tests.csproj", "{9912AEB0-1083-4626-B4EE-C1DCC3EC026A}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -15,6 +16,10 @@ Global
 		{14C2B718-8A43-4E6B-A280-032635DD6437}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{14C2B718-8A43-4E6B-A280-032635DD6437}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{14C2B718-8A43-4E6B-A280-032635DD6437}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9912AEB0-1083-4626-B4EE-C1DCC3EC026A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9912AEB0-1083-4626-B4EE-C1DCC3EC026A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9912AEB0-1083-4626-B4EE-C1DCC3EC026A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9912AEB0-1083-4626-B4EE-C1DCC3EC026A}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

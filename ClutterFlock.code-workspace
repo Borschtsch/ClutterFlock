@@ -3,14 +3,15 @@
     { "path": "." }
   ],
   "settings": {
-    "dotnet.defaultSolution": "${workspaceFolder}/FolderDupFinder.sln",
+    "dotnet.defaultSolution": "${workspaceFolder}/ClutterFlock.sln",
     "files.exclude": {
       "**/bin": true,
       "**/obj": true,
       "**/.vs": true
     },
     "terminal.integrated.defaultProfile.windows": "PowerShell",
-    "csharp.suppressDotnetRestoreNotification": true
+    "csharp.suppressDotnetRestoreNotification": true,
+    "kiroAgent.configureMCP": "Enabled"
   },
   "extensions": {
     "recommendations": [

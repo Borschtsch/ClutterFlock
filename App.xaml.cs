@@ -2,7 +2,7 @@
 using System.Data;
 using System.Windows;
 
-namespace DuplicateFinder;
+namespace ClutterFlock;
 
 /// <summary>
 /// Interaction logic for App.xaml

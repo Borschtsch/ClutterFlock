@@ -1,0 +1,21 @@
+{
+  "enabled": true,
+  "name": "Task Numbering Verification",
+  "description": "Monitors task removal and refactoring operations to verify correct numbering sequences and maintain requirement immutability",
+  "version": "1",
+  "when": {
+    "type": "fileEdited",
+    "patterns": [
+      "requirements.md",
+      "README.md",
+      "*.md",
+      "Core/*.cs",
+      "ViewModels/*.cs",
+      "Services/*.cs"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "A file has been modified that may contain tasks or requirements. Please verify:\n\n1. If any tasks were removed, check that remaining task numbering is sequential and correct\n2. For requirements (FR-XXX, NFR-XXX, etc.), ensure numbering remains unchanged - requirements should be immutable\n3. For requirement groupings with numbering, verify the grouping structure is still logical\n4. If this was a refactoring operation, confirm no task numbers were accidentally changed\n\nFocus on maintaining task sequence integrity while preserving requirement immutability."
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "enabled": true,
+  "name": "Revert Task Cleanup",
+  "description": "When asked to revert a change that was implemented through a task, ask developer if you should delete this task and associated requirements/design",
+  "version": "1",
+  "when": {
+    "type": "fileEdited",
+    "patterns": [
+      "**/*.cs",
+      "**/*.xaml",
+      "**/*.csproj",
+      "**/*.md",
+      "**/*.json"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "A developer is asking me to revert changes. Before proceeding with the revert, I should ask: \"This change appears to have been implemented as part of a specific task. Should I also delete the associated task documentation, requirements, and design files related to this implementation? This would help keep the project documentation clean and aligned with the current codebase.\""
+  }
+}
