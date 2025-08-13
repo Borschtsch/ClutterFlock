@@ -10,6 +10,9 @@
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
     
+    <!-- Runtime identifiers for publishing -->
+    <RuntimeIdentifiers>win-x64;win-x86;win-arm64</RuntimeIdentifiers>
+    
     <!-- Assembly metadata -->
     <AssemblyTitle>ClutterFlock</AssemblyTitle>
     <AssemblyDescription>Duplicate folder analysis tool</AssemblyDescription>
@@ -19,6 +22,13 @@
     <AssemblyVersion>1.0.0.0</AssemblyVersion>
     <FileVersion>1.0.0.0</FileVersion>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Remove="ClutterFlock.Tests\**" />
+    <EmbeddedResource Remove="ClutterFlock.Tests\**" />
+    <None Remove="ClutterFlock.Tests\**" />
+    <Page Remove="ClutterFlock.Tests\**" />
+  </ItemGroup>
 
   <ItemGroup>
     <Folder Include="Core\" />

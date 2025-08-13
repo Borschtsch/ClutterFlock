@@ -1,5 +1,8 @@
 # ClutterFlock
 
+[![codecov](https://codecov.io/gh/Borschtsch/ClutterFlock/branch/main/graph/badge.svg)](https://codecov.io/gh/Borschtsch/ClutterFlock)
+[![Build Status](https://github.com/Borschtsch/ClutterFlock/workflows/Build/badge.svg)](https://github.com/Borschtsch/ClutterFlock/actions)
+
 This tool can help you to optimize your decades old back-ups or find latest versions of the folders within your back-ups.
 Imagine you took photos and never sorted them, but moved them around, replaced back-up drives and now you have multiples copies of the same photos from the same day in multiple places. How to find all the folders with the same data, not just individual files?
 

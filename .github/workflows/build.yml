@@ -1,13 +1,14 @@
-name: build-and-release
+name: build-test-and-release
 
 on:
   push:
     branches: [ main ]
     tags: [ 'v*' ]
   pull_request:
+    branches: [ main ]
 
 jobs:
-  build:
+  build-and-test:
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -27,15 +28,97 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-nuget-
 
-      - name: Restore
-        run: dotnet restore "${{ github.workspace }}\FolderDupFinder.csproj"
+      - name: Restore dependencies
+        run: dotnet restore ClutterFlock.sln
 
-      - name: Build (Release)
-        run: dotnet build "${{ github.workspace }}\FolderDupFinder.csproj" -c Release /p:ContinuousIntegrationBuild=true /consoleloggerparameters:Summary
+      - name: Build solution
+        run: dotnet build ClutterFlock.sln -c Release --no-restore /p:ContinuousIntegrationBuild=true /consoleloggerparameters:Summary
 
-      - name: Publish (Release, win-x64)
+      - name: Run unit tests with coverage
+        run: dotnet test ClutterFlock.Tests/ClutterFlock.Tests.csproj -c Release --no-build --verbosity normal --logger trx --results-directory TestResults /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:CoverletOutput=TestResults/ /p:Include="[ClutterFlock]*"
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: TestResults/*.trx
+
+      - name: Upload code coverage
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: code-coverage
+          path: TestResults/coverage.cobertura.xml
+
+      - name: Generate coverage report
+        uses: danielpalme/ReportGenerator-GitHub-Action@5.4.3
+        if: always()
+        with:
+          reports: TestResults/coverage.cobertura.xml
+          targetdir: coverage-report
+          reporttypes: Html;Badges
+          verbosity: Info
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: coverage-report/
+
+      - name: Comment coverage on PR
+        uses: marocchino/sticky-pull-request-comment@v2
+        if: github.event_name == 'pull_request'
+        with:
+          recreate: true
+          path: coverage-report/SummaryGithub.md
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v4
+        if: always()
+        with:
+          files: ClutterFlock.Tests/TestResults/coverage.cobertura.xml
+          flags: unittests
+          name: ClutterFlock-coverage
+          fail_ci_if_error: false
+          verbose: true
+
+      - name: Coverage threshold check
+        shell: pwsh
+        if: always()
         run: |
-          dotnet publish "${{ github.workspace }}\FolderDupFinder.csproj" -c Release -r win-x64 --self-contained false /p:PublishSingleFile=false
+          $coverageFile = "ClutterFlock.Tests/TestResults/coverage.cobertura.xml"
+          if (Test-Path $coverageFile) {
+            [xml]$coverage = Get-Content $coverageFile
+            $lineCoverage = [double]$coverage.coverage.'line-rate' * 100
+            Write-Host "📊 Current line coverage: $($lineCoverage.ToString('F2'))%" -ForegroundColor Green
+            
+            # Set minimum coverage threshold (adjust as needed)
+            $minCoverage = 10.0
+            if ($lineCoverage -lt $minCoverage) {
+              Write-Host "⚠️  Coverage $($lineCoverage.ToString('F2'))% is below threshold $minCoverage%" -ForegroundColor Yellow
+              # Uncomment next line to fail build on low coverage:
+              # exit 1
+            } else {
+              Write-Host "✅ Coverage meets minimum threshold" -ForegroundColor Green
+            }
+          } else {
+            Write-Host "❌ Coverage file not found" -ForegroundColor Red
+          }
+
+      - name: Publish test results
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: MSTest Results
+          path: TestResults/*.trx
+          reporter: dotnet-trx
+          fail-on-error: true
+
+      - name: Publish application
+        run: |
+          dotnet publish ClutterFlock.csproj -c Release -r win-x64 --self-contained false /p:PublishSingleFile=false
 
       - name: Prepare ZIP artifact
         shell: pwsh
@@ -44,27 +127,27 @@ jobs:
           $publishDir = Join-Path (Resolve-Path .) 'bin/Release/net9.0-windows10.0.26100.0/win-x64/publish'
           if (-not (Test-Path $publishDir)) { throw "Publish directory not found: $publishDir" }
           New-Item -ItemType Directory -Force -Path out | Out-Null
-          $zipPath = "out/FolderDupFinder-win-x64.zip"
+          $zipPath = "out/ClutterFlock-win-x64.zip"
           if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
           Compress-Archive -Path "$publishDir/*" -DestinationPath $zipPath
           Write-Host "Created $zipPath"
 
-      - name: Upload artifact
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: FolderDupFinder-win-x64
-          path: out/FolderDupFinder-win-x64.zip
+          name: ClutterFlock-win-x64
+          path: out/ClutterFlock-win-x64.zip
           if-no-files-found: error
 
   release:
-    needs: build
+    needs: build-and-test
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: windows-latest
     steps:
       - name: Download built artifact
         uses: actions/download-artifact@v4
         with:
-          name: FolderDupFinder-win-x64
+          name: ClutterFlock-win-x64
           path: out
 
       - name: Create GitHub Release
@@ -75,6 +158,6 @@ jobs:
           draft: false
           prerelease: false
           files: |
-            out/FolderDupFinder-win-x64.zip
+            out/ClutterFlock-win-x64.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

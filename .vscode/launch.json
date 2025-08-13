@@ -21,6 +21,18 @@
       "cwd": "${workspaceFolder}",
       "console": "internalConsole",
       "stopAtEntry": false
+    },
+    {
+      "name": "Run Tests with Coverage + HTML Report",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "test with coverage + HTML report",
+      "program": "${workspaceFolder}/ClutterFlock.Tests/bin/Debug/net9.0-windows10.0.26100.0/ClutterFlock.Tests.dll",
+      "cwd": "${workspaceFolder}",
+      "console": "internalConsole",
+      "stopAtEntry": false,
+      "suppressJITOptimizations": true,
+      "enableStepFiltering": false
     }
   ]
 }

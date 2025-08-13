@@ -1,7 +1,7 @@
+using ClutterFlock.Models;
+
 namespace ClutterFlock.Tests
 {
-    // Test models - simplified versions for testing similarity calculation
-    public sealed record FileMatch(string PathA, string PathB);
 
     public sealed class FolderMatch
     {

@@ -118,7 +118,172 @@
 				"console;verbosity=normal"
 			],
 			"isBackground": false,
-			"group": "test"
+			"group": {
+				"kind": "test",
+				"isDefault": true
+			},
+			"problemMatcher": [
+				"$msCompile"
+			]
+		},
+		{
+			"label": "test with coverage",
+			"type": "shell",
+			"command": "dotnet",
+			"args": [
+				"test",
+				"ClutterFlock.Tests/ClutterFlock.Tests.csproj",
+				"--collect:XPlat Code Coverage",
+				"--logger:trx",
+				"--results-directory:ClutterFlock.Tests/TestResults"
+			],
+			"isBackground": false,
+			"group": "test",
+			"problemMatcher": [
+				"$msCompile"
+			]
+		},
+		{
+			"label": "test with coverlet",
+			"type": "shell",
+			"command": "dotnet",
+			"args": [
+				"test",
+				"ClutterFlock.Tests/ClutterFlock.Tests.csproj",
+				"--logger:console;verbosity=normal",
+				"/p:CollectCoverage=true",
+				"/p:CoverletOutputFormat=cobertura",
+				"/p:CoverletOutput=ClutterFlock.Tests/TestResults/coverage",
+				"/p:Include=[ClutterFlock]*"
+			],
+			"isBackground": false,
+			"group": "test",
+			"problemMatcher": [
+				"$msCompile"
+			]
+		},
+		{
+			"label": "test with coverage + HTML report",
+			"type": "shell",
+			"command": "cmd",
+			"args": [
+				"/c",
+				"dotnet test ClutterFlock.Tests/ClutterFlock.Tests.csproj /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:CoverletOutput=ClutterFlock.Tests/TestResults/coverage /p:Include=[ClutterFlock]* --logger:console;verbosity=normal && reportgenerator -reports:ClutterFlock.Tests/TestResults/coverage.cobertura.xml -targetdir:coverage-report -reporttypes:Html && start coverage-report\\index.html"
+			],
+			"isBackground": false,
+			"group": "test",
+			"problemMatcher": [
+				"$msCompile"
+			],
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "new"
+			}
+		},
+		{
+			"label": "test solution",
+			"type": "shell",
+			"command": "dotnet",
+			"args": [
+				"test",
+				"ClutterFlock.sln",
+				"--logger:console;verbosity=normal"
+			],
+			"isBackground": false,
+			"group": "test",
+			"problemMatcher": [
+				"$msCompile"
+			]
+		},
+		{
+			"label": "clean all",
+			"type": "shell",
+			"command": "dotnet",
+			"args": [
+				"clean",
+				"ClutterFlock.sln"
+			],
+			"group": "build",
+			"problemMatcher": [
+				"$msCompile"
+			]
+		},
+		{
+			"label": "build release",
+			"type": "shell",
+			"command": "dotnet",
+			"args": [
+				"build",
+				"ClutterFlock.sln",
+				"-c",
+				"Release",
+				"--no-restore"
+			],
+			"group": "build",
+			"problemMatcher": [
+				"$msCompile"
+			],
+			"dependsOn": [
+				"restore"
+			]
+		},
+		{
+			"label": "test release",
+			"type": "shell",
+			"command": "dotnet",
+			"args": [
+				"test",
+				"ClutterFlock.Tests/ClutterFlock.Tests.csproj",
+				"-c",
+				"Release",
+				"--no-build",
+				"/p:CollectCoverage=true",
+				"/p:CoverletOutputFormat=cobertura",
+				"/p:CoverletOutput=ClutterFlock.Tests/TestResults/coverage",
+				"/p:Include=[ClutterFlock]*",
+				"--logger:trx;LogFileName=test-results.trx",
+				"--results-directory:TestResults"
+			],
+			"group": "test",
+			"problemMatcher": [
+				"$msCompile"
+			]
+		},
+		{
+			"label": "generate HTML coverage report",
+			"type": "shell",
+			"command": "reportgenerator",
+			"args": [
+				"-reports:ClutterFlock.Tests/TestResults/coverage.cobertura.xml",
+				"-targetdir:coverage-report",
+				"-reporttypes:Html"
+			],
+			"group": "test",
+			"problemMatcher": []
+		}
+	],
+	"compounds": [
+		{
+			"label": "Build + Test with Coverage",
+			"dependsOrder": "sequence",
+			"dependsOn": [
+				"build (Debug)",
+				"test with coverage + HTML report"
+			]
+		},
+		{
+			"label": "Local CI Pipeline",
+			"dependsOrder": "sequence",
+			"dependsOn": [
+				"clean all",
+				"restore",
+				"build release",
+				"test release",
+				"generate HTML coverage report",
+				"publish (Release, win-x64)"
+			]
 		}
 	]
 }
