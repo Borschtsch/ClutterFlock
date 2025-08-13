@@ -35,14 +35,17 @@ jobs:
         run: dotnet build ClutterFlock.sln -c Release --no-restore /p:ContinuousIntegrationBuild=true /consoleloggerparameters:Summary
 
       - name: Run unit tests with coverage
-        run: dotnet test ClutterFlock.Tests/ClutterFlock.Tests.csproj -c Release --no-build --verbosity normal --logger trx --results-directory TestResults /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:CoverletOutput=TestResults/ /p:Include="[ClutterFlock]*"
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path TestResults | Out-Null
+          dotnet test ClutterFlock.Tests/ClutterFlock.Tests.csproj -c Release --no-build --verbosity normal --logger "trx;LogFileName=TestResults.trx" --results-directory TestResults /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:CoverletOutput=TestResults/ /p:Include="[ClutterFlock]*"
 
       - name: Upload test results
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: test-results
-          path: TestResults/*.trx
+          path: TestResults/TestResults.trx
 
       - name: Upload code coverage
         uses: actions/upload-artifact@v4
@@ -78,7 +81,7 @@ jobs:
         uses: codecov/codecov-action@v4
         if: always()
         with:
-          files: ClutterFlock.Tests/TestResults/coverage.cobertura.xml
+          files: TestResults/coverage.cobertura.xml
           flags: unittests
           name: ClutterFlock-coverage
           fail_ci_if_error: false
@@ -88,7 +91,7 @@ jobs:
         shell: pwsh
         if: always()
         run: |
-          $coverageFile = "ClutterFlock.Tests/TestResults/coverage.cobertura.xml"
+          $coverageFile = "TestResults/coverage.cobertura.xml"
           if (Test-Path $coverageFile) {
             [xml]$coverage = Get-Content $coverageFile
             $lineCoverage = [double]$coverage.coverage.'line-rate' * 100
@@ -112,7 +115,7 @@ jobs:
         if: always()
         with:
           name: MSTest Results
-          path: TestResults/*.trx
+          path: TestResults/TestResults.trx
           reporter: dotnet-trx
           fail-on-error: true
 
