@@ -9,8 +9,19 @@
 			"args": [
 				"restore",
 				"${workspaceFolder}/ClutterFlock.csproj"
+					{
+			"label": "test release",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-Command",
+				"New-Item -ItemType Directory -Force -Path TestResults | Out-Null; dotnet test ClutterFlock.Tests/ClutterFlock.Tests.csproj -c Release --no-build --verbosity normal --logger 'trx;LogFileName=TestResults.trx' --results-directory TestResults /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:CoverletOutput=TestResults/coverage '/p:Include=[ClutterFlock]*'"
 			],
-			"group": "build",
+			"group": "test",
+			"problemMatcher": [
+				"$msCompile"
+			]
+		},": "build",
 			"problemMatcher": [
 				"$msCompile"
 			]
@@ -235,7 +246,7 @@
 			"command": "powershell",
 			"args": [
 				"-Command",
-				"New-Item -ItemType Directory -Force -Path TestResults | Out-Null; dotnet test ClutterFlock.Tests/ClutterFlock.Tests.csproj -c Release --no-build --verbosity normal --logger 'trx;LogFileName=TestResults.trx' --results-directory TestResults /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:CoverletOutput=TestResults/ '/p:Include=[ClutterFlock]*'"
+				"New-Item -ItemType Directory -Force -Path TestResults | Out-Null; dotnet test ClutterFlock.Tests/ClutterFlock.Tests.csproj -c Release --no-build --verbosity normal --logger 'trx;LogFileName=TestResults.trx' --results-directory TestResults /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:CoverletOutput=TestResults/coverage '/p:Include=[ClutterFlock]*'"
 			],
 			"group": "test",
 			"problemMatcher": [
@@ -248,7 +259,7 @@
 			"command": "powershell",
 			"args": [
 				"-Command",
-				"New-Item -ItemType Directory -Force -Path TestResults | Out-Null; dotnet test ClutterFlock.Tests/ClutterFlock.Tests.csproj -c Release --no-build --verbosity normal --logger 'trx;LogFileName=TestResults.trx' --results-directory TestResults /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:CoverletOutput=TestResults/ '/p:Include=[ClutterFlock]*'"
+				"New-Item -ItemType Directory -Force -Path TestResults | Out-Null; dotnet test ClutterFlock.Tests/ClutterFlock.Tests.csproj -c Release --no-build --verbosity normal --logger 'trx;LogFileName=TestResults.trx' --results-directory TestResults /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:CoverletOutput=TestResults/coverage '/p:Include=[ClutterFlock]*'"
 			],
 			"group": "test",
 			"problemMatcher": [
