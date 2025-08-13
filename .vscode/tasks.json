@@ -145,7 +145,6 @@
 				"test",
 				"ClutterFlock.Tests/ClutterFlock.Tests.csproj",
 				"--collect:XPlat Code Coverage",
-				"--logger:trx",
 				"--results-directory:ClutterFlock.Tests/TestResults"
 			],
 			"isBackground": false,
@@ -246,7 +245,7 @@
 			"command": "powershell",
 			"args": [
 				"-Command",
-				"New-Item -ItemType Directory -Force -Path TestResults | Out-Null; dotnet test ClutterFlock.Tests/ClutterFlock.Tests.csproj -c Release --no-build --verbosity normal --logger 'trx;LogFileName=TestResults.trx' --results-directory TestResults /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:CoverletOutput=TestResults/coverage '/p:Include=[ClutterFlock]*'"
+				"New-Item -ItemType Directory -Force -Path ClutterFlock.Tests/TestResults | Out-Null; dotnet test ClutterFlock.Tests/ClutterFlock.Tests.csproj -c Release --no-build --verbosity normal /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:CoverletOutput=ClutterFlock.Tests/TestResults/coverage '/p:Include=[ClutterFlock]*'"
 			],
 			"group": "test",
 			"problemMatcher": [
@@ -259,7 +258,7 @@
 			"command": "powershell",
 			"args": [
 				"-Command",
-				"New-Item -ItemType Directory -Force -Path TestResults | Out-Null; dotnet test ClutterFlock.Tests/ClutterFlock.Tests.csproj -c Release --no-build --verbosity normal --logger 'trx;LogFileName=TestResults.trx' --results-directory TestResults /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:CoverletOutput=TestResults/coverage '/p:Include=[ClutterFlock]*'"
+				"New-Item -ItemType Directory -Force -Path ClutterFlock.Tests/TestResults | Out-Null; dotnet test ClutterFlock.Tests/ClutterFlock.Tests.csproj -c Release --no-build --verbosity normal /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:CoverletOutput=ClutterFlock.Tests/TestResults/coverage '/p:Include=[ClutterFlock]*'"
 			],
 			"group": "test",
 			"problemMatcher": [
@@ -277,7 +276,7 @@
 			"type": "shell",
 			"command": "reportgenerator",
 			"args": [
-				"-reports:TestResults/coverage.cobertura.xml",
+				"-reports:ClutterFlock.Tests/TestResults/coverage.cobertura.xml",
 				"-targetdir:coverage-report",
 				"-reporttypes:Html"
 			],
