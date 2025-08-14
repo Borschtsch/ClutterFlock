@@ -2,20 +2,45 @@
 
 ## Overview
 
-The comprehensive testing system will establish a robust testing framework for ClutterFlock that includes unit tests, integration tests, performance tests, and development workflow guidance. The design leverages the existing MSTest infrastructure and extends it with comprehensive coverage across all core components.
+The comprehensive testing system will achieve 100% statement and branch coverage for ClutterFlock by systematically identifying and fixing coverage gaps in the existing test suite. Current analysis shows 11.7% line coverage and 10.3% branch coverage, with many core classes having 0% coverage despite having unit tests written.
 
-The system will provide three main testing categories:
-- **Unit Tests**: Isolated testing of individual components with mocked dependencies
-- **Integration Tests**: End-to-end workflow testing with real file system interactions
-- **Performance Tests**: Validation of system performance requirements and scalability
+The system will focus on four main areas:
+- **Coverage Gap Analysis**: Identify why existing tests don't contribute to coverage metrics
+- **Test Execution Fixes**: Ensure all written tests properly execute against production code
+- **Missing Test Scenarios**: Add tests for uncovered branches, exception paths, and edge cases
+- **Coverage Validation**: Verify 100% coverage achievement and prevent regression
 
-Additionally, a steering document will guide developers through test-driven development practices, ensuring consistent testing workflows and proper handling of test failures.
+The approach leverages detailed coverage reports to pinpoint specific uncovered lines and branches, then systematically addresses each gap through targeted test improvements.
 
 ## Architecture
 
+### Coverage Analysis Strategy
+
+The coverage improvement process follows a systematic approach:
+
+1. **Current State Analysis**: Detailed examination of existing coverage reports
+2. **Test Execution Validation**: Ensure tests run against production code, not test code
+3. **Gap Identification**: Pinpoint specific uncovered lines, branches, and methods
+4. **Targeted Test Enhancement**: Add missing test scenarios for each uncovered path
+5. **Coverage Verification**: Validate 100% coverage achievement
+
+### Current Coverage Status
+
+Based on the latest coverage report:
+
+| Component | Line Coverage | Branch Coverage | Status |
+|-----------|---------------|-----------------|---------|
+| CacheManager | 87.8% (65/74) | 89.3% (25/28) | Good |
+| FileComparer | 100% (64/64) | 87.5% (21/24) | Excellent |
+| DuplicateAnalyzer | 0% (0/286) | 0% (0/120) | **Critical** |
+| ErrorRecoveryService | 0% (0/212) | 0% (0/36) | **Critical** |
+| FolderScanner | 0% (0/160) | 0% (0/44) | **Critical** |
+| ProjectManager | 0% (0/35) | 0% (0/12) | **Critical** |
+| MainViewModel | 0% (0/312) | 0% (0/76) | **Critical** |
+
 ### Test Project Structure
 
-The existing `ClutterFlock.Tests` project will be expanded with the following organization:
+The existing `ClutterFlock.Tests` project structure will be analyzed and enhanced:
 
 ```
 ClutterFlock.Tests/
@@ -50,23 +75,35 @@ ClutterFlock.Tests/
 └── SimilarityCalculationTests.cs   # Existing test (keep as-is)
 ```
 
-### Testing Framework Components
+### Coverage Gap Analysis Framework
 
-#### 1. Mock Infrastructure
+#### 1. Test Execution Investigation
 
-**MockFileSystem**: Provides controllable file system operations for unit testing
-- Simulates file and directory operations without actual I/O
-- Supports error injection for testing error handling paths
-- Configurable delays for testing async operations
+**Root Cause Analysis**: Identify why tests exist but don't contribute to coverage
+- Verify tests are executing against production assemblies, not test assemblies
+- Check if mocks are replacing the actual classes under test
+- Validate test runner configuration and assembly loading
+- Ensure coverage collection includes the correct assemblies
 
-**MockCacheManager**: Test double for ICacheManager interface
-- Provides predictable cache behavior for unit tests
-- Supports verification of cache operations
-- Configurable cache hit/miss scenarios
+**Test Quality Assessment**: Evaluate whether tests actually exercise production code
+- Verify tests instantiate real classes, not just mocks
+- Check that tests call methods on the system under test
+- Ensure assertions validate actual behavior, not just mock interactions
+- Validate async test execution and completion
 
-**MockErrorRecoveryService**: Test implementation of IErrorRecoveryService
-- Captures error handling calls for verification
-- Configurable recovery actions for testing different scenarios
+#### 2. Coverage Gap Identification
+
+**Line-by-Line Analysis**: Systematic examination of uncovered code
+- Parse coverage reports to identify specific uncovered lines
+- Categorize uncovered code by type (constructors, properties, methods, branches)
+- Prioritize gaps by business criticality and complexity
+- Map uncovered code to missing test scenarios
+
+**Branch Coverage Analysis**: Identify all conditional paths requiring tests
+- Analyze if/else statements, switch cases, and ternary operators
+- Identify exception handling paths and error conditions
+- Map async operation branches (success, cancellation, timeout)
+- Document null checks and defensive programming paths
 
 #### 2. Test Data Management
 
@@ -91,41 +128,81 @@ Tests will be categorized using MSTest attributes:
 
 ## Components and Interfaces
 
-### Unit Test Components
+### Critical Coverage Fixes Required
 
-#### Core Component Tests
+#### DuplicateAnalyzer (0% Coverage - 286 Lines)
 
-**DuplicateAnalyzerTests**
-- Tests duplicate detection logic with various file scenarios
-- Validates hash comparison accuracy
-- Tests progress reporting and cancellation
-- Verifies error handling for inaccessible files
-- Tests folder aggregation and similarity calculations
+**Immediate Issues to Investigate**:
+- Why existing DuplicateAnalyzerTests don't execute against production code
+- Whether mock dependencies are preventing real method execution
+- If async test patterns are properly awaited and completed
 
-**FileComparerTests**
-- Tests file comparison logic for detail view
-- Validates file status determination (duplicate, unique, missing)
-- Tests sorting and filtering operations
-- Verifies error handling for file access issues
+**Missing Test Scenarios** (based on 286 uncovered lines):
+- Constructor validation and dependency injection
+- FindDuplicateFilesAsync with various file combinations
+- Hash computation and comparison logic
+- Progress reporting throughout analysis phases
+- Cancellation token handling and cleanup
+- Error recovery for file access failures
+- AggregateFolderMatchesAsync with complex folder structures
+- ApplyFilters with all filter criteria combinations
 
-**FolderScannerTests**
-- Tests recursive folder scanning logic
-- Validates progress reporting during scanning
-- Tests cancellation behavior
-- Verifies error handling for permission issues
-- Tests caching integration
+#### ErrorRecoveryService (0% Coverage - 212 Lines)
 
-**CacheManagerTests**
-- Tests all cache operations (get, set, clear, remove)
-- Validates thread safety of concurrent operations
-- Tests cache invalidation scenarios
-- Verifies memory management and cleanup
+**Immediate Issues to Investigate**:
+- Whether ErrorRecoveryService is being instantiated in tests
+- If error injection scenarios are actually triggering service methods
+- Whether UI interaction mocking prevents service execution
 
-**ProjectManagerTests**
-- Tests project save/load operations
-- Validates JSON serialization/deserialization
-- Tests backward compatibility with legacy formats
-- Verifies error handling for corrupted files
+**Missing Test Scenarios**:
+- Error detection and categorization logic
+- Recovery action determination and execution
+- User interaction handling for error resolution
+- Error logging and reporting mechanisms
+- Batch error processing and summarization
+
+#### FolderScanner (0% Coverage - 160 Lines)
+
+**Immediate Issues to Investigate**:
+- Whether async scanning operations complete in tests
+- If mock file system prevents real scanning logic execution
+- Whether progress reporting callbacks are properly configured
+
+**Missing Test Scenarios**:
+- ScanFolderHierarchyAsync with various folder structures
+- Recursive directory traversal and file enumeration
+- Progress reporting accuracy and frequency
+- Cancellation handling during long operations
+- Error handling for permission and access issues
+- Cache integration during scanning operations
+
+#### ProjectManager (0% Coverage - 35 Lines)
+
+**Immediate Issues to Investigate**:
+- Whether file I/O operations are mocked away completely
+- If JSON serialization/deserialization is being tested
+- Whether project file validation logic executes
+
+**Missing Test Scenarios**:
+- SaveProjectAsync with various project data structures
+- LoadProjectAsync with different file formats and versions
+- File validation and error handling
+- Backward compatibility with legacy formats
+- Concurrent access and file locking scenarios
+
+#### MainViewModel (0% Coverage - 312 Lines)
+
+**Immediate Issues to Investigate**:
+- Whether ViewModel commands are being executed in tests
+- If property change notifications are triggering
+- Whether dependency injection is working in test context
+
+**Missing Test Scenarios**:
+- All ICommand implementations and CanExecute logic
+- Property change notifications and data binding
+- Async command execution and progress reporting
+- Error handling and user message display
+- State management during long operations
 
 #### ViewModel Tests
 
@@ -267,16 +344,24 @@ Tests will verify that the application:
 ### Coverage Requirements
 
 **Code Coverage Targets**
-- Core business logic: 90%+ coverage
-- ViewModels: 80%+ coverage
-- Services: 85%+ coverage
-- Overall project: 80%+ coverage
+- All Core classes: 100% statement coverage, 95% branch coverage
+- All ViewModels: 100% statement coverage, 95% branch coverage  
+- All Services: 100% statement coverage, 95% branch coverage
+- Overall project: 100% statement coverage, 95% branch coverage
 
-**Functional Coverage**
-- All public methods and properties tested
-- All error handling paths validated
-- All async operations tested with cancellation
-- All UI commands and data binding tested
+**Specific Coverage Goals**
+- DuplicateAnalyzer: 286/286 lines covered (currently 0/286)
+- ErrorRecoveryService: 212/212 lines covered (currently 0/212)
+- FolderScanner: 160/160 lines covered (currently 0/160)
+- ProjectManager: 35/35 lines covered (currently 0/35)
+- MainViewModel: 312/312 lines covered (currently 0/312)
+- CacheManager: 74/74 lines covered (currently 65/74)
+- FileComparer: Maintain 64/64 lines covered (already achieved)
+
+**Branch Coverage Goals**
+- Total branches: 522 (currently 54 covered)
+- Target: 495+ branches covered (95% minimum)
+- Focus on conditional logic, exception handling, and async paths
 
 ### Continuous Integration Integration
 

@@ -2,90 +2,91 @@
 
 ## Introduction
 
-This feature establishes comprehensive test coverage for the ClutterFlock application and creates development workflow guidance to ensure code changes are validated through automated testing. The system will include unit tests, integration tests, and a steering document that guides developers to run tests after code changes and handle test failures appropriately.
+This feature focuses on achieving 100% statement and branch coverage for the ClutterFlock application by identifying and fixing coverage gaps in the existing test suite. The current coverage is only 11.7% line coverage and 10.3% branch coverage, with many core classes having 0% coverage despite having unit tests written. The system will analyze coverage gaps, fix non-executing tests, and add missing test scenarios to achieve comprehensive coverage.
 
 ## Requirements
 
 ### Requirement 1
 
-**User Story:** As a developer, I want comprehensive unit test coverage for all core business logic, so that I can confidently make changes without breaking existing functionality.
+**User Story:** As a developer, I want to identify and fix coverage gaps in existing unit tests, so that all core business logic achieves 100% statement and branch coverage.
 
 #### Acceptance Criteria
 
-1. WHEN the test suite runs THEN all Core classes SHALL have unit tests with at least 80% code coverage
-2. WHEN testing DuplicateAnalyzer THEN the system SHALL verify duplicate detection accuracy with various file scenarios
-3. WHEN testing FileComparer THEN the system SHALL validate hash comparison, size comparison, and name comparison logic
-4. WHEN testing FolderScanner THEN the system SHALL verify recursive scanning, error handling, and progress reporting
-5. WHEN testing CacheManager THEN the system SHALL validate caching operations, cache invalidation, and memory management
-6. WHEN testing ProjectManager THEN the system SHALL verify project save/load functionality with various file formats
+1. WHEN analyzing current coverage THEN the system SHALL identify why DuplicateAnalyzer, ErrorRecoveryService, FolderScanner, ProjectManager, and MainViewModel have 0% coverage despite having tests
+2. WHEN fixing test execution issues THEN all existing unit tests SHALL run successfully and contribute to coverage metrics
+3. WHEN running the complete test suite THEN all Core classes SHALL achieve at least 95% statement coverage and 90% branch coverage
+4. WHEN testing edge cases THEN the system SHALL cover all conditional branches, exception handling paths, and async operation scenarios
+5. WHEN validating coverage THEN the system SHALL ensure no unreachable code exists and all public methods are tested
+6. WHEN measuring final coverage THEN the overall project SHALL achieve 100% statement coverage and 95% branch coverage
 
 ### Requirement 2
 
-**User Story:** As a developer, I want integration tests for the complete workflow, so that I can ensure all components work together correctly.
+**User Story:** As a developer, I want to analyze and fix specific coverage gaps in each core component, so that every method, property, and code path is thoroughly tested.
 
 #### Acceptance Criteria
 
-1. WHEN running integration tests THEN the system SHALL test complete folder analysis workflows from start to finish
-2. WHEN testing with sample data THEN the system SHALL verify end-to-end duplicate detection across multiple folders
-3. WHEN testing project persistence THEN the system SHALL validate complete save/load cycles with real project data
-4. WHEN testing cancellation scenarios THEN the system SHALL verify proper cleanup and resource disposal
-5. WHEN testing error scenarios THEN the system SHALL validate graceful handling of file system errors
+1. WHEN analyzing DuplicateAnalyzer coverage THEN the system SHALL identify why 0% of 286 lines are covered and fix test execution issues
+2. WHEN analyzing ErrorRecoveryService coverage THEN the system SHALL identify why 0% of 212 lines are covered and add missing test scenarios
+3. WHEN analyzing FolderScanner coverage THEN the system SHALL identify why 0% of 160 lines are covered and fix async test execution
+4. WHEN analyzing ProjectManager coverage THEN the system SHALL identify why 0% of 35 lines are covered and add file I/O test scenarios
+5. WHEN analyzing MainViewModel coverage THEN the system SHALL identify why 0% of 312 lines are covered and add UI command test scenarios
 
 ### Requirement 3
 
-**User Story:** As a developer, I want performance tests to validate system requirements, so that I can ensure the application meets its performance criteria.
+**User Story:** As a developer, I want to identify and test all uncovered branches and conditional paths, so that every decision point in the code is validated.
 
 #### Acceptance Criteria
 
-1. WHEN running performance tests THEN the system SHALL validate processing speed of at least 10,000 files per minute
-2. WHEN testing with large datasets THEN the system SHALL verify memory usage remains below 2GB
-3. WHEN testing UI responsiveness THEN the system SHALL ensure UI updates occur within 100ms
-4. WHEN testing scalability THEN the system SHALL handle 100,000+ subfolders without performance degradation
+1. WHEN analyzing branch coverage THEN the system SHALL identify all 522 branches and ensure 95% are covered by tests
+2. WHEN testing conditional logic THEN the system SHALL cover all if/else branches, switch statements, and ternary operators
+3. WHEN testing exception handling THEN the system SHALL cover all try/catch blocks and exception throwing scenarios
+4. WHEN testing async operations THEN the system SHALL cover all cancellation paths, timeout scenarios, and completion states
+5. WHEN testing null checks THEN the system SHALL cover all null reference validation and defensive programming paths
 
 ### Requirement 4
 
-**User Story:** As a developer, I want a test framework setup that integrates with the existing MSTest infrastructure, so that tests can be run consistently in the development environment.
+**User Story:** As a developer, I want to fix test infrastructure issues that prevent tests from executing, so that all written tests contribute to coverage metrics.
 
 #### Acceptance Criteria
 
-1. WHEN setting up the test framework THEN the system SHALL extend the existing ClutterFlock.Tests project
-2. WHEN organizing tests THEN the system SHALL follow a clear folder structure separating unit, integration, and performance tests
-3. WHEN running tests THEN the system SHALL support both Visual Studio Test Explorer and dotnet test CLI
-4. WHEN generating test reports THEN the system SHALL provide code coverage metrics and test results
-5. WHEN tests fail THEN the system SHALL provide clear error messages and debugging information
+1. WHEN investigating test execution THEN the system SHALL identify why 125 tests pass but contribute minimal coverage
+2. WHEN fixing mock implementations THEN all mock services SHALL properly simulate real component behavior for coverage
+3. WHEN configuring test runners THEN the system SHALL ensure tests execute against the main application code, not test-only code
+4. WHEN validating test isolation THEN each test SHALL run independently without affecting coverage of other tests
+5. WHEN running coverage analysis THEN the system SHALL accurately measure coverage of the main ClutterFlock assembly
 
 ### Requirement 5
 
-**User Story:** As a developer, I want mock objects and test utilities for isolated testing, so that I can test components independently without external dependencies.
+**User Story:** As a developer, I want to add missing test scenarios for uncovered code paths, so that every line of code is executed during testing.
 
 #### Acceptance Criteria
 
-1. WHEN testing file system operations THEN the system SHALL provide mock file system implementations
-2. WHEN testing async operations THEN the system SHALL provide utilities for testing cancellation and progress reporting
-3. WHEN testing UI components THEN the system SHALL provide mock ViewModels and test data
-4. WHEN testing caching THEN the system SHALL provide controllable cache implementations for testing
-5. WHEN creating test data THEN the system SHALL provide utilities for generating sample files and folder structures
+1. WHEN identifying missing scenarios THEN the system SHALL add tests for all constructor overloads, property setters, and method parameters
+2. WHEN testing error conditions THEN the system SHALL add tests for all exception throwing scenarios and error recovery paths
+3. WHEN testing async methods THEN the system SHALL add tests for cancellation, progress reporting, and completion scenarios
+4. WHEN testing UI interactions THEN the system SHALL add tests for all command executions, property changes, and event handling
+5. WHEN testing file operations THEN the system SHALL add tests for all file I/O scenarios, permission errors, and data validation
 
 ### Requirement 6
 
-**User Story:** As a developer, I want steering documentation that guides the test-driven development workflow, so that I follow consistent practices when making code changes.
+**User Story:** As a developer, I want to validate that all tests execute real application code, so that coverage metrics accurately reflect the testing of production code paths.
 
 #### Acceptance Criteria
 
-1. WHEN making code changes THEN the steering document SHALL instruct running tests before and after changes
-2. WHEN tests fail THEN the steering document SHALL guide reporting failures and potential fixes rather than immediately fixing tests
-3. WHEN tests don't build THEN the steering document SHALL provide troubleshooting steps and escalation procedures
-4. WHEN adding new features THEN the steering document SHALL require corresponding test coverage
-5. WHEN refactoring code THEN the steering document SHALL ensure existing tests continue to pass
+1. WHEN running tests THEN the system SHALL ensure tests execute methods from the main ClutterFlock assembly, not test assemblies
+2. WHEN using mocks THEN the system SHALL verify that mocks are used for dependencies only, not for the classes under test
+3. WHEN measuring coverage THEN the system SHALL exclude test code, mock implementations, and generated code from coverage calculations
+4. WHEN validating test quality THEN each test SHALL assert meaningful behavior and state changes in the system under test
+5. WHEN achieving 100% coverage THEN the system SHALL verify that all covered lines represent real business logic execution
 
 ### Requirement 7
 
-**User Story:** As a developer, I want automated test execution integrated into the development workflow, so that tests are run consistently and failures are caught early.
+**User Story:** As a developer, I want comprehensive coverage reporting and validation, so that I can verify 100% coverage has been achieved and maintained.
 
 #### Acceptance Criteria
 
-1. WHEN building the solution THEN the system SHALL optionally run tests as part of the build process
-2. WHEN tests fail during build THEN the system SHALL halt the build and report specific failures
-3. WHEN running tests via CLI THEN the system SHALL support filtering by category (unit, integration, performance)
-4. WHEN generating reports THEN the system SHALL output results in multiple formats (console, XML, HTML)
-5. WHEN tests complete THEN the system SHALL provide summary statistics including coverage percentages
+1. WHEN generating coverage reports THEN the system SHALL provide detailed line-by-line coverage information for all source files
+2. WHEN identifying uncovered code THEN the system SHALL highlight specific lines, branches, and methods that lack test coverage
+3. WHEN validating coverage quality THEN the system SHALL ensure covered lines represent meaningful test execution, not just code loading
+4. WHEN maintaining coverage THEN the system SHALL provide automated checks to prevent coverage regression
+5. WHEN reporting results THEN the system SHALL generate both summary statistics and detailed coverage reports in HTML format

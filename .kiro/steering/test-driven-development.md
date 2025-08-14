@@ -2,22 +2,39 @@
 
 This document provides comprehensive guidance for maintaining code quality through systematic testing practices in the ClutterFlock project. Follow these procedures to ensure all code changes are properly validated and test failures are handled appropriately.
 
+## ⚠️ CRITICAL: Test Execution Requirements
+
+**ALWAYS use the exact command from VS Code "test with coverage" task:**
+
+- Read the command from `.vscode/tasks.json` under the "test with coverage" task
+- Execute the exact command specified in the task's args array
+- **NEVER use direct `dotnet test` commands without coverage**
+- This ensures consistent coverage collection and reporting
+- Coverage data is essential for maintaining code quality standards
+
+**Example workflow:**
+1. Read `.vscode/tasks.json` 
+2. Find the "test with coverage" task
+3. Execute the command from that task's configuration
+
 ## Pre-Change Testing Protocol
 
 ### Before Making Any Code Changes
 
 1. **Run the complete test suite** to establish a baseline:
-   ```cmd
-   dotnet test
-   ```
+   **ALWAYS use VS Code Task: "test with coverage"** (Ctrl+Shift+P → "Tasks: Run Task")
+
+   **NEVER use direct dotnet test commands - always use the VS Code task for consistent coverage collection.**
 
 2. **Document baseline results** in your development notes:
+
    - Total tests run
    - Any pre-existing failures
    - Overall pass/fail status
    - Code coverage percentage (if available)
 
 3. **Identify and categorize any existing failures**:
+
    - Test infrastructure issues
    - Known failing tests
    - Environmental dependencies
@@ -40,15 +57,22 @@ This document provides comprehensive guidance for maintaining code quality throu
 ### After Making Code Changes
 
 1. **Build the solution first**:
+
    ```cmd
    dotnet build
    ```
+
    - If build fails, fix compilation errors before proceeding
    - Do not modify tests to make builds pass
 
 2. **Run the complete test suite**:
-   ```cmd
+   **ALWAYS use VS Code Task: "test with coverage"** (Ctrl+Shift+P → "Tasks: Run Task")
+
+   **NEVER use direct dotnet test commands.**
    dotnet test
+
+   ```
+
    ```
 
 3. **Analyze test results systematically**:
@@ -70,17 +94,20 @@ This document provides comprehensive guidance for maintaining code quality throu
 **DO NOT immediately fix failing tests.** Instead, follow this analysis process:
 
 1. **Categorize the failure type**:
+
    - **Code Issue**: Your changes broke existing functionality
    - **Test Issue**: Test needs updating due to legitimate behavior change
    - **Infrastructure Issue**: Test environment or setup problem
 
 2. **For Code Issues** (most common):
+
    - Review your changes for unintended side effects
    - Check if you broke existing contracts or interfaces
    - Verify async/await patterns and thread safety
    - Ensure proper error handling is maintained
 
 3. **For Test Issues** (requires careful consideration):
+
    - Document why the test behavior should change
    - Verify the new behavior meets requirements
    - Update test expectations only after confirming correctness
@@ -96,12 +123,14 @@ This document provides comprehensive guidance for maintaining code quality throu
 When you encounter test failures:
 
 1. **Document the failure details**:
+
    - Which tests failed
    - Error messages and stack traces
    - Your analysis of the root cause
    - Proposed resolution approach
 
 2. **Report before fixing**:
+
    - Create a clear description of the issue
    - Include your analysis and proposed fix
    - Wait for confirmation before proceeding with test modifications
@@ -113,17 +142,20 @@ When you encounter test failures:
 ### When Tests Don't Build
 
 1. **Check compilation errors first**:
+
    ```cmd
    dotnet build ClutterFlock.Tests
    ```
 
 2. **Common build issues**:
+
    - Missing using statements
    - Interface changes not reflected in mocks
    - Async method signature changes
    - Namespace or assembly reference issues
 
 3. **Troubleshooting steps**:
+
    - Verify all project references are correct
    - Check that mock implementations match current interfaces
    - Ensure test utilities are compatible with code changes
@@ -149,6 +181,7 @@ When implementing new features, you MUST:
 ### Test Implementation Guidelines
 
 1. **Follow the existing test structure**:
+
    ```
    ClutterFlock.Tests/
    ├── Unit/[Component]/[FeatureName]Tests.cs
@@ -157,6 +190,7 @@ When implementing new features, you MUST:
    ```
 
 2. **Use appropriate test categories**:
+
    ```csharp
    [TestCategory("Unit")]
    [TestCategory("Integration")]
@@ -164,6 +198,7 @@ When implementing new features, you MUST:
    ```
 
 3. **Follow naming conventions**:
+
    - Test methods: `MethodName_Scenario_ExpectedResult`
    - Test classes: `[ComponentName]Tests`
    - Mock classes: `Mock[InterfaceName]`
@@ -189,15 +224,18 @@ When implementing new features, you MUST:
 ### When Refactoring Existing Code
 
 1. **Run tests before refactoring**:
+
    - Establish baseline test results
    - Ensure all tests pass before changes
 
 2. **Refactor incrementally**:
+
    - Make small, focused changes
    - Run tests after each significant change
    - Maintain test coverage throughout
 
 3. **Update tests appropriately**:
+
    - Tests should continue to pass after refactoring
    - Update test names if method names change
    - Modify test setup if constructor signatures change
@@ -238,6 +276,7 @@ dotnet test --logger:console;verbosity=detailed
 To integrate tests into your build process:
 
 1. **Create a build script** (build-and-test.cmd):
+
    ```cmd
    @echo off
    echo Building solution...
@@ -246,14 +285,14 @@ To integrate tests into your build process:
        echo Build failed!
        exit /b %ERRORLEVEL%
    )
-   
+
    echo Running tests...
    dotnet test --no-build
    if %ERRORLEVEL% neq 0 (
        echo Tests failed!
        exit /b %ERRORLEVEL%
    )
-   
+
    echo Build and tests completed successfully!
    ```
 

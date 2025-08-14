@@ -532,5 +532,145 @@ namespace ClutterFlock.Tests.Unit.Core
             Assert.AreEqual(threadCount * operationsPerThread, _cacheManager.GetCachedFolderCount());
             Assert.AreEqual(threadCount * operationsPerThread, _cacheManager.GetCachedFileHashCount());
         }
+
+        [TestMethod]
+        public void LoadFromProjectData_WithExistingFiles_RebuildsFileMetadataCache()
+        {
+            // Arrange
+            var tempDir = CreateTempDirectory();
+            var testFile1 = Path.Combine(tempDir, "test1.txt");
+            var testFile2 = Path.Combine(tempDir, "test2.txt");
+            
+            // Create real files
+            File.WriteAllText(testFile1, "Test content 1");
+            File.WriteAllText(testFile2, "Test content 2");
+            
+            var projectData = new ProjectData
+            {
+                ScanFolders = new List<string> { tempDir },
+                FolderInfoCache = new Dictionary<string, FolderInfo>
+                {
+                    [tempDir] = new FolderInfo
+                    {
+                        Files = new List<string> { testFile1, testFile2 },
+                        TotalSize = 1024,
+                        LatestModificationDate = DateTime.Now
+                    }
+                },
+                FileHashCache = new Dictionary<string, string>
+                {
+                    [testFile1] = "hash1",
+                    [testFile2] = "hash2"
+                },
+                FolderFileCache = new Dictionary<string, List<string>>
+                {
+                    [tempDir] = new List<string> { testFile1, testFile2 }
+                }
+            };
+
+            // Act
+            _cacheManager.LoadFromProjectData(projectData);
+
+            // Assert
+            var metadata1 = _cacheManager.GetFileMetadata(testFile1);
+            var metadata2 = _cacheManager.GetFileMetadata(testFile2);
+            
+            Assert.IsNotNull(metadata1);
+            Assert.IsNotNull(metadata2);
+            Assert.AreEqual("test1.txt", metadata1.FileName);
+            Assert.AreEqual("test2.txt", metadata2.FileName);
+            Assert.IsTrue(metadata1.Size > 0);
+            Assert.IsTrue(metadata2.Size > 0);
+        }
+
+        [TestMethod]
+        public void LoadFromProjectData_WithNonExistentFiles_SkipsFileMetadataCreation()
+        {
+            // Arrange
+            var nonExistentFile1 = @"C:\NonExistent\file1.txt";
+            var nonExistentFile2 = @"C:\NonExistent\file2.txt";
+            
+            var projectData = new ProjectData
+            {
+                ScanFolders = new List<string> { @"C:\NonExistent" },
+                FolderInfoCache = new Dictionary<string, FolderInfo>
+                {
+                    [@"C:\NonExistent"] = new FolderInfo
+                    {
+                        Files = new List<string> { nonExistentFile1, nonExistentFile2 },
+                        TotalSize = 1024,
+                        LatestModificationDate = DateTime.Now
+                    }
+                },
+                FileHashCache = new Dictionary<string, string>
+                {
+                    [nonExistentFile1] = "hash1",
+                    [nonExistentFile2] = "hash2"
+                },
+                FolderFileCache = new Dictionary<string, List<string>>
+                {
+                    [@"C:\NonExistent"] = new List<string> { nonExistentFile1, nonExistentFile2 }
+                }
+            };
+
+            // Act
+            _cacheManager.LoadFromProjectData(projectData);
+
+            // Assert - Should not throw exceptions and should load other data correctly
+            Assert.AreEqual(1, _cacheManager.GetCachedFolderCount());
+            Assert.AreEqual(2, _cacheManager.GetCachedFileHashCount());
+            
+            // File metadata should not be created for non-existent files
+            var metadata1 = _cacheManager.GetFileMetadata(nonExistentFile1);
+            var metadata2 = _cacheManager.GetFileMetadata(nonExistentFile2);
+            Assert.IsNull(metadata1);
+            Assert.IsNull(metadata2);
+        }
+
+        [TestMethod]
+        public void LoadFromProjectData_WithInaccessibleFiles_HandlesExceptionsGracefully()
+        {
+            // Arrange
+            var tempDir = CreateTempDirectory();
+            var testFile = Path.Combine(tempDir, "test.txt");
+            
+            // Create a file and then make it inaccessible by creating a directory with the same name
+            File.WriteAllText(testFile, "Test content");
+            File.Delete(testFile);
+            Directory.CreateDirectory(testFile); // This will cause FileInfo to throw when accessing properties
+            
+            var projectData = new ProjectData
+            {
+                ScanFolders = new List<string> { tempDir },
+                FolderInfoCache = new Dictionary<string, FolderInfo>
+                {
+                    [tempDir] = new FolderInfo
+                    {
+                        Files = new List<string> { testFile },
+                        TotalSize = 1024,
+                        LatestModificationDate = DateTime.Now
+                    }
+                },
+                FileHashCache = new Dictionary<string, string>
+                {
+                    [testFile] = "hash1"
+                },
+                FolderFileCache = new Dictionary<string, List<string>>
+                {
+                    [tempDir] = new List<string> { testFile }
+                }
+            };
+
+            // Act & Assert - Should not throw exceptions
+            _cacheManager.LoadFromProjectData(projectData);
+            
+            // Should load other data correctly despite file access issues
+            Assert.AreEqual(1, _cacheManager.GetCachedFolderCount());
+            Assert.AreEqual(1, _cacheManager.GetCachedFileHashCount());
+            
+            // File metadata should not be created due to access issues
+            var metadata = _cacheManager.GetFileMetadata(testFile);
+            Assert.IsNull(metadata);
+        }
     }
 }

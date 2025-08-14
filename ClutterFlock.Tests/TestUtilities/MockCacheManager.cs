@@ -11,10 +11,10 @@ namespace ClutterFlock.Tests.TestUtilities
     /// </summary>
     public class MockCacheManager : ICacheManager
     {
-        private readonly Dictionary<string, FolderInfo> _folderInfoCache = new();
-        private readonly Dictionary<string, string> _fileHashCache = new();
-        private readonly Dictionary<string, List<string>> _folderFilesCache = new();
-        private readonly Dictionary<string, FileMetadata> _fileMetadataCache = new();
+        private readonly Dictionary<string, FolderInfo> _folderInfoCache = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, string> _fileHashCache = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, List<string>> _folderFilesCache = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, FileMetadata> _fileMetadataCache = new(StringComparer.OrdinalIgnoreCase);
 
         // Test utilities
         public List<string> CacheOperations { get; } = new();
