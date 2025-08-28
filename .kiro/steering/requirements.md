@@ -35,6 +35,7 @@
 - Progress reporting MUST be implemented for operations >1 second
 
 ### Testing Requirements
+- **Achieve 100% code coverage** for all production code
 - Test with large datasets (100,000+ files)
 - Validate memory usage and performance metrics
 - Test cancellation and cleanup procedures
@@ -109,10 +110,12 @@ if (!Dispatcher.CheckAccess())
 - [ ] Memory usage validated with large datasets
 - [ ] Error handling covers all file system scenarios
 - [ ] Progress reporting implemented for long operations
+- [ ] **100% code coverage achieved** for all production code
 
 ### Before Release
 - [ ] Performance metrics meet requirements (10k files/min, <2GB RAM, <100ms UI)
 - [ ] Accuracy validation (100% hash-based duplicate detection)
 - [ ] Stress testing with 100,000+ files completed
 - [ ] All error scenarios tested and handled gracefully
+- [ ] **100% code coverage maintained** across all production code
 - [ ] Documentation complete and accurate

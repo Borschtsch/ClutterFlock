@@ -469,5 +469,7 @@ namespace ClutterFlock.Tests.Unit.Core
             Assert.AreEqual("right.txt", rightOnly.PrimaryFileName);
             Assert.AreEqual("left.txt", bothFiles.PrimaryFileName); // Left takes precedence
         }
+
+
     }
 }

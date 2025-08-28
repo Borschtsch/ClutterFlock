@@ -10,7 +10,7 @@ namespace ClutterFlock.Tests.TestUtilities
     /// <summary>
     /// Utility for monitoring performance metrics during tests
     /// </summary>
-    public class PerformanceTestHelper
+    public class PerformanceTestHelper : IDisposable
     {
         private readonly List<PerformanceMetric> _metrics = new();
         private readonly List<ProgressUpdate> _progressUpdates = new();
@@ -18,6 +18,7 @@ namespace ClutterFlock.Tests.TestUtilities
         private readonly PerformanceCounter? _cpuCounter;
         private long _initialMemory;
         private long _peakMemory;
+        private Stopwatch? _currentStopwatch;
 
         public PerformanceTestHelper()
         {
@@ -41,6 +42,36 @@ namespace ClutterFlock.Tests.TestUtilities
             _peakMemory = _initialMemory;
             
             return new PerformanceMonitor(this, operationName);
+        }
+
+        /// <summary>
+        /// Starts simple monitoring without returning a monitor object
+        /// </summary>
+        public void StartMonitoring()
+        {
+            _initialMemory = GC.GetTotalMemory(false);
+            _peakMemory = _initialMemory;
+            _currentStopwatch = Stopwatch.StartNew();
+        }
+
+        /// <summary>
+        /// Gets current performance metrics
+        /// </summary>
+        public PerformanceMetric GetCurrentMetrics()
+        {
+            var currentMemory = GC.GetTotalMemory(false);
+            var executionTime = _currentStopwatch?.Elapsed ?? TimeSpan.Zero;
+            
+            return new PerformanceMetric
+            {
+                OperationName = "Current",
+                ExecutionTime = executionTime,
+                MemoryUsageBytes = currentMemory,
+                MemoryIncrease = currentMemory - _initialMemory,
+                ItemsProcessed = 0,
+                ThroughputPerSecond = 0,
+                Timestamp = DateTime.Now
+            };
         }
 
         /// <summary>

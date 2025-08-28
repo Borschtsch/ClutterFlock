@@ -26,6 +26,11 @@ namespace ClutterFlock.Core
         /// </summary>
         public async Task<RecoveryAction> HandleFileAccessError(string filePath, Exception error)
         {
+            if (filePath == null)
+                throw new ArgumentNullException(nameof(filePath));
+            if (error == null)
+                throw new ArgumentNullException(nameof(error));
+
             lock (_lockObject)
             {
                 _errorSummary.LastErrorTime = DateTime.Now;
@@ -49,6 +54,11 @@ namespace ClutterFlock.Core
         /// </summary>
         public async Task<RecoveryAction> HandleNetworkError(string networkPath, Exception error)
         {
+            if (networkPath == null)
+                throw new ArgumentNullException(nameof(networkPath));
+            if (error == null)
+                throw new ArgumentNullException(nameof(error));
+
             lock (_lockObject)
             {
                 _errorSummary.NetworkErrors++;
@@ -88,6 +98,9 @@ namespace ClutterFlock.Core
         /// </summary>
         public async Task<RecoveryAction> HandleResourceConstraintError(ResourceConstraintType type, Exception error)
         {
+            if (error == null)
+                throw new ArgumentNullException(nameof(error));
+
             lock (_lockObject)
             {
                 _errorSummary.ResourceErrors++;
@@ -111,6 +124,11 @@ namespace ClutterFlock.Core
         /// </summary>
         public void LogSkippedItem(string path, string reason)
         {
+            if (path == null)
+                throw new ArgumentNullException(nameof(path));
+            if (reason == null)
+                throw new ArgumentNullException(nameof(reason));
+
             lock (_lockObject)
             {
                 _errorSummary.SkippedFiles++;
@@ -259,11 +277,11 @@ namespace ClutterFlock.Core
         {
             return new RecoveryAction
             {
-                Type = RecoveryActionType.Abort,
+                Type = RecoveryActionType.PauseAndWait,
                 Message = "Insufficient disk space",
-                SuggestedSolution = "Free up disk space and restart the analysis. The operation cannot continue.",
-                ShouldRetry = false,
-                RetryDelay = TimeSpan.Zero
+                SuggestedSolution = "Free up disk space and the analysis will continue automatically.",
+                ShouldRetry = true,
+                RetryDelay = TimeSpan.FromSeconds(30)
             };
         }
 

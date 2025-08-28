@@ -3,31 +3,6 @@ using ClutterFlock.Models;
 namespace ClutterFlock.Tests
 {
 
-    public sealed class FolderMatch
-    {
-        public string LeftFolder { get; }
-        public string RightFolder { get; }
-        public List<FileMatch> DuplicateFiles { get; }
-        public double SimilarityPercentage { get; }
-        public long FolderSizeBytes { get; }
-
-        public FolderMatch(string leftFolder, string rightFolder, List<FileMatch> duplicateFiles, 
-            int totalLeftFiles, int totalRightFiles, long folderSizeBytes = 0)
-        {
-            LeftFolder = leftFolder;
-            RightFolder = rightFolder;
-            DuplicateFiles = duplicateFiles;
-            FolderSizeBytes = folderSizeBytes;
-            
-            // Calculate Jaccard similarity: |A ∩ B| / |A ∪ B|
-            // Union size = total files in both folders minus duplicates (to avoid double counting)
-            var unionSize = totalLeftFiles + totalRightFiles - duplicateFiles.Count;
-            SimilarityPercentage = unionSize > 0 
-                ? (duplicateFiles.Count / (double)unionSize * 100.0) 
-                : 0.0;
-        }
-    }
-
     [TestClass]
     public sealed class SimilarityCalculationTests
     {

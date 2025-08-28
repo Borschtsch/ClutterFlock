@@ -27,6 +27,10 @@ namespace ClutterFlock.Core
 
         public async Task<List<string>> ScanFolderHierarchyAsync(string rootPath, IProgress<AnalysisProgress>? progress, CancellationToken cancellationToken)
         {
+            if (rootPath == null) throw new ArgumentNullException(nameof(rootPath));
+            if (string.IsNullOrWhiteSpace(rootPath)) throw new ArgumentException("Path cannot be empty or whitespace.", nameof(rootPath));
+            if (!Directory.Exists(rootPath)) throw new DirectoryNotFoundException($"Directory not found: {rootPath}");
+
             var subfolders = new List<string>();
             var stack = new Stack<string>();
             stack.Push(rootPath);
@@ -153,6 +157,10 @@ namespace ClutterFlock.Core
 
         public async Task<FolderInfo> AnalyzeFolderAsync(string folderPath, CancellationToken cancellationToken)
         {
+            if (folderPath == null) throw new ArgumentNullException(nameof(folderPath));
+            if (string.IsNullOrWhiteSpace(folderPath)) throw new ArgumentException("Path cannot be empty or whitespace.", nameof(folderPath));
+            if (!Directory.Exists(folderPath)) throw new DirectoryNotFoundException($"Directory not found: {folderPath}");
+
             return await Task.Run(() => AnalyzeFolderSync(folderPath), cancellationToken);
         }
 
@@ -207,6 +215,10 @@ namespace ClutterFlock.Core
 
         public int CountSubfolders(string rootPath)
         {
+            if (rootPath == null) throw new ArgumentNullException(nameof(rootPath));
+            if (string.IsNullOrWhiteSpace(rootPath)) throw new ArgumentException("Path cannot be empty or whitespace.", nameof(rootPath));
+            if (!Directory.Exists(rootPath)) throw new DirectoryNotFoundException($"Directory not found: {rootPath}");
+
             try
             {
                 var count = 0;

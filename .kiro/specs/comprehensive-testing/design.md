@@ -121,10 +121,13 @@ ClutterFlock.Tests/
 #### 3. Test Categories and Attributes
 
 Tests will be categorized using MSTest attributes:
-- `[TestCategory("Unit")]` - Fast, isolated unit tests
-- `[TestCategory("Integration")]` - Slower integration tests requiring file system
-- `[TestCategory("Performance")]` - Performance validation tests
-- `[TestCategory("LongRunning")]` - Tests that may take significant time
+- `[TestCategory("Unit")]` - Fast, isolated unit tests with mocked dependencies
+- `[TestCategory("Integration")]` - Tests that use real file system and component interactions
+- `[TestCategory("EndToEnd")]` - Complete workflow tests simulating user scenarios
+- `[TestCategory("Performance")]` - Performance validation tests with large datasets
+- `[TestCategory("LongRunning")]` - Tests that may take significant time (>30 seconds)
+- `[TestCategory("FileSystem")]` - Tests that require real file system access
+- `[TestCategory("Cancellation")]` - Tests focused on cancellation and cleanup behavior
 
 ## Components and Interfaces
 
@@ -214,21 +217,67 @@ Tests will be categorized using MSTest attributes:
 
 ### Integration Test Components
 
+#### End-to-End Workflow Tests
+
 **FullWorkflowTests**
-- Tests complete folder analysis workflows
-- Validates end-to-end duplicate detection
-- Tests project save/load with real data
-- Verifies UI integration points
+- Tests complete folder analysis workflows from folder selection to results display
+- Validates end-to-end duplicate detection with real file systems
+- Tests project save/load with actual file I/O operations
+- Verifies UI integration points and data binding
+- Tests complete user scenarios: add folders → scan → analyze → filter → save project
+
+**ComponentIntegrationTests**
+- Tests data flow between CacheManager, FolderScanner, and DuplicateAnalyzer
+- Validates that cached data is properly shared between components
+- Tests progress reporting chain from core services to MainViewModel to UI
+- Verifies error propagation and handling across component boundaries
+- Tests concurrent access to shared resources (caches, file system)
 
 **ProjectPersistenceTests**
-- Tests complete project lifecycle (create, save, load, modify)
-- Validates data integrity across save/load cycles
-- Tests migration from legacy formats
+- Tests complete project lifecycle (create, save, load, modify, save again)
+- Validates data integrity across multiple save/load cycles
+- Tests migration from legacy .dfp formats to new .cfp format
+- Tests project file corruption recovery and validation
+- Tests concurrent project access and file locking scenarios
+
+#### Real-World Scenario Tests
+
+**FileSystemIntegrationTests**
+- Tests with actual file systems including network drives and UNC paths
+- Validates handling of various file types, sizes, and permissions
+- Tests with symbolic links, junctions, and special folders
+- Tests with files that change during analysis (concurrent modifications)
+- Tests with extremely deep folder hierarchies and long paths
+
+**LargeDatasetIntegrationTests**
+- Tests complete workflows with 10,000+ files across 1,000+ folders
+- Validates memory usage and performance under realistic loads
+- Tests progress reporting accuracy with large datasets
+- Tests cancellation behavior during long-running operations
+- Tests UI responsiveness during heavy processing
+
+**ErrorRecoveryIntegrationTests**
+- Tests complete error recovery workflows across all components
+- Validates that permission errors don't stop entire analysis
+- Tests recovery from corrupted cache data
+- Tests handling of files that become inaccessible during analysis
+- Tests graceful degradation when some folders can't be scanned
+
+#### Cancellation and Resource Management Tests
 
 **CancellationTests**
-- Tests cancellation behavior across all operations
-- Validates proper resource cleanup
+- Tests cancellation behavior across all operations and components
+- Validates proper resource cleanup when operations are cancelled
 - Tests UI responsiveness during cancellation
+- Tests that cancelled operations don't leave corrupted state
+- Tests rapid start/cancel/start cycles
+
+**ResourceManagementTests**
+- Tests proper disposal of file handles and system resources
+- Validates cache cleanup and memory management
+- Tests thread cleanup and proper task cancellation
+- Tests that background operations don't prevent application shutdown
+- Tests resource usage under stress conditions
 
 ### Performance Test Components
 
@@ -323,6 +372,54 @@ Tests will verify that the application:
 - Properly cleans up resources after errors
 
 ## Testing Strategy
+
+### Integration Testing Strategy
+
+#### Test Environment Setup
+
+**Real File System Testing**
+- Integration tests will use actual temporary directories and files
+- Each test class will have dedicated test data directories
+- Automatic cleanup ensures test isolation and prevents interference
+- Support for testing with various file system types (NTFS, network drives)
+
+**Component Integration Approach**
+- Tests will use real instances of all components, not mocks
+- Dependencies will be injected normally to test actual interactions
+- Shared resources (caches, file system) will be tested for thread safety
+- Error conditions will be simulated through real file system manipulation
+
+**Test Data Management**
+- TestFileSystemHelper will create realistic folder structures
+- Generated test data will include various file types, sizes, and dates
+- Test scenarios will include duplicate files, empty folders, and permission issues
+- Large dataset tests will generate thousands of files for performance validation
+
+#### Integration Test Execution Flow
+
+**Setup Phase**
+1. Create isolated temporary directory structure
+2. Generate test files with known content and hashes
+3. Initialize real component instances with test configuration
+4. Set up progress reporting and cancellation token monitoring
+
+**Execution Phase**
+1. Execute complete workflows using real components
+2. Monitor resource usage, memory consumption, and performance
+3. Validate progress reporting accuracy and timing
+4. Test cancellation at various stages of execution
+
+**Validation Phase**
+1. Verify expected results match actual component outputs
+2. Validate data integrity and consistency across components
+3. Check proper resource cleanup and disposal
+4. Ensure no side effects or state corruption
+
+**Cleanup Phase**
+1. Dispose all component instances properly
+2. Clean up temporary files and directories
+3. Verify no resource leaks or hanging processes
+4. Reset any global state for next test
 
 ### Test Execution Strategy
 

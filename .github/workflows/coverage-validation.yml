@@ -1,0 +1,149 @@
+# Coverage Validation Workflow for ClutterFlock
+# This workflow runs on pull requests and pushes to main branch
+# It validates that code coverage meets minimum thresholds
+
+name: Coverage Validation
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  coverage:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '9.0.x'
+        
+    - name: Restore dependencies
+      run: dotnet restore ClutterFlock.sln
+      
+    - name: Build solution
+      run: dotnet build ClutterFlock.sln -c Release --no-restore
+      
+    - name: Create TestResults directory
+      run: New-Item -ItemType Directory -Force -Path ClutterFlock.Tests/TestResults
+      shell: pwsh
+      
+    - name: Run tests with coverage
+      run: |
+        dotnet test ClutterFlock.Tests/ClutterFlock.Tests.csproj -c Release --no-build --verbosity normal /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:CoverletOutput=ClutterFlock.Tests/TestResults/coverage "/p:Include=[ClutterFlock]*"
+      shell: pwsh
+      
+    - name: Install ReportGenerator
+      run: dotnet tool install -g dotnet-reportgenerator-globaltool
+      
+    - name: Generate coverage report
+      run: |
+        reportgenerator -reports:ClutterFlock.Tests/TestResults/coverage.cobertura.xml -targetdir:coverage-report -reporttypes:Html;Badges;TextSummary
+      shell: pwsh
+      
+    - name: Validate coverage thresholds
+      run: |
+        # Parse coverage from XML and validate thresholds
+        [xml]$coverage = Get-Content "ClutterFlock.Tests/TestResults/coverage.cobertura.xml"
+        $lineRate = [math]::Round([double]$coverage.coverage.'line-rate' * 100, 2)
+        $branchRate = [math]::Round([double]$coverage.coverage.'branch-rate' * 100, 2)
+        
+        Write-Host "Line Coverage: $lineRate%"
+        Write-Host "Branch Coverage: $branchRate%"
+        
+        # Set thresholds
+        $lineThreshold = 100
+        $branchThreshold = 100
+        
+        $passed = $true
+        
+        if ($lineRate -lt $lineThreshold) {
+          Write-Error "Line coverage ($lineRate%) below threshold ($lineThreshold%)"
+          $passed = $false
+        }
+        
+        if ($branchRate -lt $branchThreshold) {
+          Write-Error "Branch coverage ($branchRate%) below threshold ($branchThreshold%)"
+          $passed = $false
+        }
+        
+        if (-not $passed) {
+          Write-Error "Coverage validation failed"
+          exit 1
+        }
+        
+        Write-Host "✅ Coverage validation passed"
+      shell: pwsh
+      
+    - name: Upload coverage reports
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: coverage-report
+        path: |
+          coverage-report/
+          ClutterFlock.Tests/TestResults/coverage.cobertura.xml
+        retention-days: 30
+        
+    - name: Comment coverage on PR
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          
+          // Read coverage summary
+          let coverageSummary = '';
+          try {
+            coverageSummary = fs.readFileSync('coverage-report/Summary.txt', 'utf8');
+          } catch (error) {
+            coverageSummary = 'Coverage summary not available';
+          }
+          
+          // Create comment body
+          const commentBody = `## 📊 Coverage Report
+          
+          ${coverageSummary}
+          
+          📋 [Full Coverage Report](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          
+          > Coverage validation: ${{ job.status === 'success' ? '✅ Passed' : '❌ Failed' }}`;
+          
+          // Post comment
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: commentBody
+          });
+
+  # Optional: Codecov integration
+  codecov:
+    runs-on: windows-latest
+    needs: coverage
+    if: always()
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Download coverage artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: coverage-report
+        
+    - name: Upload to Codecov
+      uses: codecov/codecov-action@v4
+      with:
+        file: ClutterFlock.Tests/TestResults/coverage.cobertura.xml
+        flags: unittests
+        name: ClutterFlock Coverage
+        fail_ci_if_error: false
+        verbose: true
+      env:
+        CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}

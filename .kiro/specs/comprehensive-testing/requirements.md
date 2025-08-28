@@ -90,3 +90,39 @@ This feature focuses on achieving 100% statement and branch coverage for the Clu
 3. WHEN validating coverage quality THEN the system SHALL ensure covered lines represent meaningful test execution, not just code loading
 4. WHEN maintaining coverage THEN the system SHALL provide automated checks to prevent coverage regression
 5. WHEN reporting results THEN the system SHALL generate both summary statistics and detailed coverage reports in HTML format
+
+### Requirement 8
+
+**User Story:** As a developer, I want comprehensive integration tests that validate end-to-end workflows, so that I can ensure all components work together correctly in realistic scenarios.
+
+#### Acceptance Criteria
+
+1. WHEN running integration tests THEN the system SHALL test complete folder analysis workflows from start to finish
+2. WHEN testing project persistence THEN the system SHALL validate save/load cycles with real file I/O operations
+3. WHEN testing cancellation scenarios THEN the system SHALL verify proper cleanup and resource management across all components
+4. WHEN testing error recovery THEN the system SHALL validate that errors in one component don't break the entire workflow
+5. WHEN testing with real file systems THEN the system SHALL handle actual file permissions, network drives, and large datasets
+
+### Requirement 9
+
+**User Story:** As a developer, I want integration tests that validate component interactions and data flow, so that I can catch issues that unit tests might miss.
+
+#### Acceptance Criteria
+
+1. WHEN testing component integration THEN the system SHALL verify data flows correctly between CacheManager, FolderScanner, and DuplicateAnalyzer
+2. WHEN testing UI integration THEN the system SHALL validate that MainViewModel correctly orchestrates all core services
+3. WHEN testing progress reporting THEN the system SHALL verify that progress updates flow correctly from core services to the UI
+4. WHEN testing concurrent operations THEN the system SHALL validate thread safety and proper synchronization between components
+5. WHEN testing memory management THEN the system SHALL verify that caches are properly shared and cleaned up across components
+
+### Requirement 10
+
+**User Story:** As a developer, I want integration tests that simulate realistic user scenarios, so that I can validate the application behaves correctly under real-world conditions.
+
+#### Acceptance Criteria
+
+1. WHEN simulating typical user workflows THEN the system SHALL test adding folders, running analysis, filtering results, and saving projects
+2. WHEN testing with various folder structures THEN the system SHALL handle nested hierarchies, symbolic links, and mixed file types
+3. WHEN testing with large datasets THEN the system SHALL maintain performance and memory usage within acceptable limits
+4. WHEN testing error scenarios THEN the system SHALL gracefully handle permission errors, missing files, and corrupted data
+5. WHEN testing cancellation during operations THEN the system SHALL properly stop all background tasks and clean up resources

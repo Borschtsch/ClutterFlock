@@ -130,6 +130,67 @@
 				"focus": false,
 				"panel": "new"
 			}
+		},
+		{
+			"label": "validate coverage",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"scripts/validate-coverage.ps1",
+				"-Verbose"
+			],
+			"group": "test",
+			"problemMatcher": [],
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "new"
+			}
+		},
+		{
+			"label": "coverage report",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"scripts/coverage-report.ps1"
+			],
+			"group": "test",
+			"problemMatcher": [
+				"$msCompile"
+			],
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "new"
+			}
+		},
+		{
+			"label": "coverage report (skip build)",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"scripts/coverage-report.ps1",
+				"-SkipBuild"
+			],
+			"group": "test",
+			"problemMatcher": [],
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "new"
+			}
 		}
 	],
 	"compounds": [
@@ -151,6 +212,17 @@
 				"test GitHub Actions style",
 				"generate HTML coverage report",
 				"publish (Release, win-x64)"
+			]
+		},
+		{
+			"label": "Full Coverage Pipeline",
+			"dependsOrder": "sequence",
+			"dependsOn": [
+				"clean all",
+				"restore",
+				"build (Release)",
+				"coverage report",
+				"validate coverage"
 			]
 		}
 	]
