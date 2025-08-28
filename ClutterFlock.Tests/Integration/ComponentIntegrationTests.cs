@@ -214,8 +214,8 @@ namespace ClutterFlock.Tests.Integration
             var datasetPath = await FileSystemHelper.CreateLargeDatasetAsync(5, 10); // 50 files
             var folders = Directory.GetDirectories(datasetPath).Take(3).ToList();
 
-            var progressUpdates = new List<AnalysisProgress>();
-            var progress = new Progress<AnalysisProgress>(p => progressUpdates.Add(p));
+            var progressCollector = new ThreadSafeProgressCollector();
+            var progress = progressCollector.CreateProgress();
 
             using var monitor = PerformanceHelper.StartMonitoring("ProgressReporting_Integration");
 
@@ -233,7 +233,10 @@ namespace ClutterFlock.Tests.Integration
             var folderMatches = await _duplicateAnalyzer.AggregateFolderMatchesAsync(fileMatches, _cacheManager, progress);
 
             // Assert - Verify progress reporting integration
-            Assert.IsTrue(progressUpdates.Count > 0, "Should have received progress updates");
+            Assert.IsTrue(progressCollector.Count > 0, "Should have received progress updates");
+
+            // Get a thread-safe snapshot for analysis
+            var progressUpdates = progressCollector.GetSnapshot();
 
             // Verify different phases were reported
             var phases = progressUpdates.Select(p => p.Phase).Distinct().ToList();
@@ -262,7 +265,7 @@ namespace ClutterFlock.Tests.Integration
                 Assert.IsTrue(lastProgress >= firstProgress, "Progress should generally increase");
             }
 
-            monitor.RecordItemsProcessed(progressUpdates.Count);
+            monitor.RecordItemsProcessed(progressCollector.Count);
         }
 
         [TestMethod]

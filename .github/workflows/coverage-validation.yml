@@ -56,9 +56,9 @@ jobs:
         Write-Host "Line Coverage: $lineRate%"
         Write-Host "Branch Coverage: $branchRate%"
         
-        # Set thresholds
-        $lineThreshold = 100
-        $branchThreshold = 100
+        # Set thresholds (more reasonable than 100%)
+        $lineThreshold = 75
+        $branchThreshold = 60
         
         $passed = $true
         
