@@ -112,7 +112,7 @@ jobs:
           
           📋 [Full Coverage Report](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
           
-          > Coverage validation: ${{ job.status === 'success' ? '✅ Passed' : '❌ Failed' }}`;
+          > Coverage validation: ${{ job.status == 'success' ? '✅ Passed' : '❌ Failed' }}`;
           
           // Post comment
           github.rest.issues.createComment({
