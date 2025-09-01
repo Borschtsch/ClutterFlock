@@ -111,19 +111,34 @@ jobs:
 
       - name: Install Inno Setup
         run: |
-          Invoke-WebRequest -Uri "https://jrsoftware.org/download.php/is.exe" -OutFile "innosetup.exe"
-          Start-Process -FilePath "innosetup.exe" -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait
+          # Use chocolatey to install Inno Setup - more reliable in CI
+          choco install innosetup -y
           
       - name: Create Windows Installer
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           
-          # Find Inno Setup
-          $innoPath = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          if (-not (Test-Path $innoPath)) {
-            throw "Inno Setup not found at $innoPath"
+          # Find Inno Setup (chocolatey installs to different path)
+          $possiblePaths = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "${env:ProgramFiles}\Inno Setup 6\ISCC.exe",
+            "C:\ProgramData\chocolatey\lib\innosetup\tools\ISCC.exe"
+          )
+          
+          $innoPath = $null
+          foreach ($path in $possiblePaths) {
+            if (Test-Path $path) {
+              $innoPath = $path
+              break
+            }
           }
+          
+          if (-not $innoPath) {
+            throw "Inno Setup not found in any expected location"
+          }
+          
+          Write-Host "Found Inno Setup at: $innoPath"
           
           # Copy published files to installer directory
           $publishDir = "bin/Release/net9.0-windows10.0.26100.0/win-x64/publish"
