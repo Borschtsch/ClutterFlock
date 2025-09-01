@@ -19,6 +19,10 @@ ArchitecturesAllowed=x64
 ArchitecturesInstallIn64BitMode=x64
 UninstallDisplayIcon={app}\ClutterFlock.exe
 
+#ifndef SourceDir
+#define SourceDir "files"
+#endif
+
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
@@ -27,8 +31,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Name: "quicklaunchicon"; Description: "{cm:CreateQuickLaunchIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked; OnlyBelowVersion: 6.1
 
 [Files]
-Source: "ClutterFlock.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "*.pdb"
+Source: "{#SourceDir}\ClutterFlock.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "*.pdb"
 
 [Icons]
 Name: "{autoprograms}\ClutterFlock"; Filename: "{app}\ClutterFlock.exe"; Comment: "Duplicate folder analysis tool"

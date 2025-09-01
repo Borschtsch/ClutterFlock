@@ -48,6 +48,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Folder Include=".github\workflows\" />
     <Folder Include="Core\" />
     <Folder Include="Models\" />
     <Folder Include="Services\" />

@@ -148,10 +148,21 @@ jobs:
           New-Item -ItemType Directory -Force -Path $installerDir | Out-Null
           Copy-Item "$publishDir/*" -Destination $installerDir -Recurse
           
-          # Build installer from the files directory
-          Push-Location $installerDir
+          # Verify the main executable exists
+          $mainExe = "$installerDir/ClutterFlock.exe"
+          if (-not (Test-Path $mainExe)) {
+            Write-Host "❌ ClutterFlock.exe not found in published files"
+            Write-Host "Available files in $installerDir :"
+            Get-ChildItem $installerDir -Recurse | ForEach-Object { Write-Host "  $($_.FullName)" }
+            throw "ClutterFlock.exe not found in published output"
+          }
+          
+          Write-Host "✅ Found ClutterFlock.exe at: $mainExe"
+          
+          # Build installer - run from installer directory so relative paths work
+          Push-Location installer
           try {
-            & $innoPath "../setup.iss"
+            & $innoPath "setup.iss" /DSourceDir="files"
             if ($LASTEXITCODE -ne 0) {
               throw "Inno Setup failed with exit code $LASTEXITCODE"
             }
