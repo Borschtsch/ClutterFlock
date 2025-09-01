@@ -422,3 +422,12 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# ClutterFlock specific build artifacts
+installer/files/
+installer/output/
+out/
+*.exe
+
+# Installer temporary files
+innosetup.exe

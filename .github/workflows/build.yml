@@ -107,25 +107,85 @@ jobs:
 
       - name: Publish application
         run: |
-          dotnet publish ClutterFlock.csproj -c Release -r win-x64 --self-contained false /p:PublishSingleFile=false
+          dotnet publish ClutterFlock.csproj -c Release -r win-x64 --self-contained true /p:PublishSingleFile=true
 
-      - name: Prepare ZIP artifact
+      - name: Install Inno Setup
+        run: |
+          Invoke-WebRequest -Uri "https://jrsoftware.org/download.php/is.exe" -OutFile "innosetup.exe"
+          Start-Process -FilePath "innosetup.exe" -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait
+          
+      - name: Create Windows Installer
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $publishDir = Join-Path (Resolve-Path .) 'bin/Release/net9.0-windows10.0.26100.0/win-x64/publish'
-          if (-not (Test-Path $publishDir)) { throw "Publish directory not found: $publishDir" }
-          New-Item -ItemType Directory -Force -Path out | Out-Null
-          $zipPath = "out/ClutterFlock-win-x64.zip"
-          if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
-          Compress-Archive -Path "$publishDir/*" -DestinationPath $zipPath
-          Write-Host "Created $zipPath"
+          
+          # Find Inno Setup
+          $innoPath = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $innoPath)) {
+            throw "Inno Setup not found at $innoPath"
+          }
+          
+          # Copy published files to installer directory
+          $publishDir = "bin/Release/net9.0-windows10.0.26100.0/win-x64/publish"
+          $installerDir = "installer/files"
+          
+          if (Test-Path $installerDir) { Remove-Item $installerDir -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path $installerDir | Out-Null
+          Copy-Item "$publishDir/*" -Destination $installerDir -Recurse
+          
+          # Build installer from the files directory
+          Push-Location $installerDir
+          try {
+            & $innoPath "../setup.iss"
+            if ($LASTEXITCODE -ne 0) {
+              throw "Inno Setup failed with exit code $LASTEXITCODE"
+            }
+          } finally {
+            Pop-Location
+          }
+          
+          # Verify installer was created
+          if (-not (Test-Path "installer/output/ClutterFlock-Setup.exe")) {
+            throw "Installer was not created"
+          }
+          
+          Write-Host "✅ Installer created successfully"
 
-      - name: Upload build artifact
+      - name: Prepare release artifacts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          
+          # Create output directory
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          
+          # Copy installer
+          if (Test-Path "installer/output/ClutterFlock-Setup.exe") {
+            Copy-Item "installer/output/ClutterFlock-Setup.exe" "out/ClutterFlock-Setup.exe"
+            Write-Host "✅ Installer copied to out/"
+          }
+          
+          # Create ZIP for portable version
+          $publishDir = "bin/Release/net9.0-windows10.0.26100.0/win-x64/publish"
+          if (Test-Path $publishDir) {
+            $zipPath = "out/ClutterFlock-Portable-win-x64.zip"
+            if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+            Compress-Archive -Path "$publishDir/*" -DestinationPath $zipPath
+            Write-Host "✅ Portable ZIP created: $zipPath"
+          }
+
+      - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ClutterFlock-win-x64
-          path: out/ClutterFlock-win-x64.zip
+          name: ClutterFlock-Installer
+          path: out/ClutterFlock-Setup.exe
+          if-no-files-found: error
+
+      - name: Upload portable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClutterFlock-Portable
+          path: out/ClutterFlock-Portable-win-x64.zip
           if-no-files-found: error
 
   release:
@@ -133,10 +193,16 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: windows-latest
     steps:
-      - name: Download built artifact
+      - name: Download installer artifact
         uses: actions/download-artifact@v4
         with:
-          name: ClutterFlock-win-x64
+          name: ClutterFlock-Installer
+          path: out
+
+      - name: Download portable artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ClutterFlock-Portable
           path: out
 
       - name: Create GitHub Release
@@ -147,6 +213,30 @@ jobs:
           draft: false
           prerelease: false
           files: |
-            out/ClutterFlock-win-x64.zip
+            out/ClutterFlock-Setup.exe
+            out/ClutterFlock-Portable-win-x64.zip
+          body: |
+            ## ClutterFlock ${{ github.ref_name }}
+            
+            ### Installation Options
+            
+            **🚀 Recommended: Windows Installer**
+            - Download `ClutterFlock-Setup.exe` for easy installation
+            - Automatically creates start menu shortcuts
+            - Includes uninstaller
+            - Requires Windows 10/11 x64
+            
+            **📁 Portable Version**
+            - Download `ClutterFlock-Portable-win-x64.zip` for portable use
+            - No installation required
+            - Extract and run `ClutterFlock.exe`
+            - Perfect for USB drives or temporary use
+            
+            ### What's New
+            - See the [changelog](https://github.com/Borschtsch/ClutterFlock/releases) for details
+            
+            ### System Requirements
+            - Windows 10 version 1809 or later (x64)
+            - .NET 9 Runtime (included in installer)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
