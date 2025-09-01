@@ -13,15 +13,32 @@
     <!-- Runtime identifiers for publishing -->
     <RuntimeIdentifiers>win-x64;win-x86;win-arm64</RuntimeIdentifiers>
     
+    <!-- Publishing configuration - trimming disabled for WPF/WinForms compatibility -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <PublishTrimmed>false</PublishTrimmed>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    
+    <!-- MinVer Configuration for automatic versioning -->
+    <MinVerDefaultPreReleaseIdentifiers>dev</MinVerDefaultPreReleaseIdentifiers>
+    <MinVerTagPrefix>v</MinVerTagPrefix>
+    <MinVerVerbosity>normal</MinVerVerbosity>
+    
     <!-- Assembly metadata -->
     <AssemblyTitle>ClutterFlock</AssemblyTitle>
     <AssemblyDescription>Duplicate folder analysis tool</AssemblyDescription>
     <AssemblyProduct>ClutterFlock</AssemblyProduct>
-    <AssemblyCompany></AssemblyCompany>
-    <AssemblyCopyright></AssemblyCopyright>
-    <AssemblyVersion>1.0.0.0</AssemblyVersion>
-    <FileVersion>1.0.0.0</FileVersion>
+    <AssemblyCompany>ClutterFlock Team</AssemblyCompany>
+    <AssemblyCopyright>© 2024 ClutterFlock Team</AssemblyCopyright>
   </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MinVer" Version="6.0.0">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
 
   <ItemGroup>
     <Compile Remove="ClutterFlock.Tests\**" />
