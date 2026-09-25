@@ -40,6 +40,7 @@ namespace ClutterFlock
             
             // Bind folder list
             listBoxFolders.ItemsSource = _viewModel.ScanFolders;
+            listBoxFolders.SelectionChanged += (_, _) => UpdateButtonStates();
             
             // Set up initial UI state
             UpdateButtonStates();
@@ -77,7 +78,20 @@ namespace ClutterFlock
             {
                 case nameof(MainViewModel.OperationInProgress):
                 case nameof(MainViewModel.IsPopulatingResults):
+                case nameof(MainViewModel.CanRemoveFolders):
                     UpdateButtonStates();
+                    break;
+                case nameof(MainViewModel.MinimumSimilarity):
+                    txtMinSimilarity.Text = _viewModel.MinimumSimilarity.ToString();
+                    break;
+                case nameof(MainViewModel.MinimumSizeMB):
+                    txtMinSize.Text = _viewModel.MinimumSizeMB.ToString();
+                    break;
+                case nameof(MainViewModel.ShowUniqueFiles):
+                    chkShowUniqueFiles.IsChecked = _viewModel.ShowUniqueFiles;
+                    break;
+                case nameof(MainViewModel.SelectedFolderMatch):
+                    listViewFolderMatches.SelectedItem = _viewModel.SelectedFolderMatch;
                     break;
                 case nameof(MainViewModel.StatusMessage):
                     if (statusLabel != null)
@@ -192,7 +206,7 @@ namespace ClutterFlock
         {
             var dlg = new Microsoft.Win32.OpenFileDialog
             {
-                Filter = "ClutterFlock Project (*.cfp)|*.cfp|All Files (*.*)|*.*",
+                Filter = "ClutterFlock Projects (*.cfp;*.dfp)|*.cfp;*.dfp|All Files (*.*)|*.*",
                 DefaultExt = "cfp"
             };
             if (dlg.ShowDialog() != true) return;
@@ -208,7 +222,7 @@ namespace ClutterFlock
             }
         }
 
-        private void ApplyFilters_Click(object sender, RoutedEventArgs e)
+        private async void ApplyFilters_Click(object sender, RoutedEventArgs e)
         {
             // Update ViewModel filter properties from UI with validation
             if (double.TryParse(txtMinSimilarity?.Text, out var similarity))
@@ -221,7 +235,7 @@ namespace ClutterFlock
                 _viewModel.MinimumSizeMB = Math.Max(0, sizeMB);
             }
                 
-            _viewModel.ApplyFilters();
+            await _viewModel.ApplyFiltersAsync();
         }
 
         private void listViewFolderMatches_SelectionChanged(object sender, SelectionChangedEventArgs e)

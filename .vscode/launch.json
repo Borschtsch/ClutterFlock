@@ -7,7 +7,7 @@
       "type": "coreclr",
       "request": "launch",
       "preLaunchTask": "build (Debug)",
-      "program": "${workspaceFolder}/bin/Debug/net9.0-windows10.0.26100.0/ClutterFlock.exe",
+      "program": "${workspaceFolder}/bin/Debug/net10.0-windows10.0.26100.0/ClutterFlock.exe",
       "cwd": "${workspaceFolder}",
       "console": "internalConsole",
       "stopAtEntry": false
@@ -17,7 +17,7 @@
       "type": "coreclr",
       "request": "launch",
       "preLaunchTask": "build (Release)",
-      "program": "${workspaceFolder}/bin/Release/net9.0-windows10.0.26100.0/ClutterFlock.exe",
+      "program": "${workspaceFolder}/bin/Release/net10.0-windows10.0.26100.0/ClutterFlock.exe",
       "cwd": "${workspaceFolder}",
       "console": "internalConsole",
       "stopAtEntry": false
@@ -26,8 +26,8 @@
       "name": "Run Tests with Coverage + HTML Report",
       "type": "coreclr",
       "request": "launch",
-      "preLaunchTask": "test with coverage + HTML report",
-      "program": "${workspaceFolder}/ClutterFlock.Tests/bin/Debug/net9.0-windows10.0.26100.0/ClutterFlock.Tests.dll",
+      "preLaunchTask": "test with coverage",
+      "program": "${workspaceFolder}/ClutterFlock.Tests/bin/Debug/net10.0-windows10.0.26100.0/ClutterFlock.Tests.dll",
       "cwd": "${workspaceFolder}",
       "console": "internalConsole",
       "stopAtEntry": false,

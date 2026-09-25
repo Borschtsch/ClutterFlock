@@ -54,13 +54,13 @@ namespace ClutterFlock.Core
                 // Populate left folder file info
                 if (leftFile != null)
                 {
-                    PopulateFileInfo(leftFile, fileDetail, isLeft: true);
+                    PopulateFileInfo(leftFile, fileDetail, cacheManager, isLeft: true);
                 }
                 
                 // Populate right folder file info
                 if (rightFile != null)
                 {
-                    PopulateFileInfo(rightFile, fileDetail, isLeft: false);
+                    PopulateFileInfo(rightFile, fileDetail, cacheManager, isLeft: false);
                 }
                 
                 fileDetails.Add(fileDetail);
@@ -74,20 +74,20 @@ namespace ClutterFlock.Core
             return showUniqueFiles ? allFiles : allFiles.Where(f => f.IsDuplicate).ToList();
         }
 
-        private static void PopulateFileInfo(string filePath, FileDetailInfo fileDetail, bool isLeft)
+        private static void PopulateFileInfo(string filePath, FileDetailInfo fileDetail, ICacheManager cacheManager, bool isLeft)
         {
             try
             {
-                var fileInfo = new FileInfo(filePath);
+                var fileInfo = cacheManager.GetFileMetadata(filePath) ?? throw new IOException("Metadata not available in saved project");
                 var fileName = Path.GetFileName(filePath);
-                var sizeDisplay = FormatSize(fileInfo.Length);
+                var sizeDisplay = FormatSize(fileInfo.Size);
                 var dateDisplay = FormatDate(fileInfo.LastWriteTime);
                 
                 if (isLeft)
                 {
                     fileDetail.LeftFileName = fileName;
                     fileDetail.LeftSizeDisplay = sizeDisplay;
-                    fileDetail.LeftSizeBytes = fileInfo.Length;
+                    fileDetail.LeftSizeBytes = fileInfo.Size;
                     fileDetail.LeftDateDisplay = dateDisplay;
                     fileDetail.LeftDate = fileInfo.LastWriteTime;
                     fileDetail.LeftFullPath = filePath;
@@ -96,7 +96,7 @@ namespace ClutterFlock.Core
                 {
                     fileDetail.RightFileName = fileName;
                     fileDetail.RightSizeDisplay = sizeDisplay;
-                    fileDetail.RightSizeBytes = fileInfo.Length;
+                    fileDetail.RightSizeBytes = fileInfo.Size;
                     fileDetail.RightDateDisplay = dateDisplay;
                     fileDetail.RightDate = fileInfo.LastWriteTime;
                     fileDetail.RightFullPath = filePath;
@@ -124,9 +124,9 @@ namespace ClutterFlock.Core
 
         private static string FormatSize(long size)
         {
-            if (size >= 1L << 30) return $"{size / (1L << 30):N1} GB";
-            if (size >= 1L << 20) return $"{size / (1L << 20):N1} MB";
-            if (size >= 1L << 10) return $"{size / (1L << 10):N1} KB";
+            if (size >= 1L << 30) return $"{size / (double)(1L << 30):N1} GB";
+            if (size >= 1L << 20) return $"{size / (double)(1L << 20):N1} MB";
+            if (size >= 1L << 10) return $"{size / (double)(1L << 10):N1} KB";
             return $"{size} B";
         }
 

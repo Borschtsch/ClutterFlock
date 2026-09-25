@@ -62,29 +62,29 @@ namespace ClutterFlock.Core
 
         public void RemoveFolderFromCache(string folderPath)
         {
-            // Normalize the folder path to ensure consistent comparison
-            var normalizedPath = folderPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            
-            var keysToRemove = _folderInfoCache.Keys
-                .Where(k => k.StartsWith(normalizedPath, StringComparison.OrdinalIgnoreCase))
-                .ToList();
+            // Normalize the folder path to ensure consistent comparison.
+            // PathUtilities also checks directory boundaries before removing descendants.
+            RemoveEntries(path => PathUtilities.IsWithin(path, folderPath));
+        }
 
-            foreach (var key in keysToRemove)
+        public void RetainFolders(IReadOnlyCollection<string> roots)
+        {
+            RemoveEntries(path => !roots.Any(root => PathUtilities.IsWithin(path, root)));
+        }
+
+        private void RemoveEntries(Func<string, bool> remove)
+        {
+            foreach (var path in _folderInfoCache.Keys.Where(remove))
             {
-                _folderInfoCache.TryRemove(key, out _);
-                _folderFileCache.TryRemove(key, out _);
+                _folderInfoCache.TryRemove(path, out _);
+                _folderFileCache.TryRemove(path, out _);
             }
-
-            // Also remove file hashes and metadata for files in removed folders
-            var fileKeysToRemove = _fileHashCache.Keys
-                .Where(k => k.StartsWith(normalizedPath, StringComparison.OrdinalIgnoreCase))
-                .ToList();
-
-            foreach (var key in fileKeysToRemove)
-            {
-                _fileHashCache.TryRemove(key, out _);
-                _fileMetadataCache.TryRemove(key, out _);
-            }
+            // Also remove file hashes and metadata for files in removed folders.
+            // Metadata has its own keys because not every scanned file has been hashed.
+            foreach (var path in _fileHashCache.Keys.Where(remove))
+                _fileHashCache.TryRemove(path, out _);
+            foreach (var path in _fileMetadataCache.Keys.Where(remove))
+                _fileMetadataCache.TryRemove(path, out _);
         }
 
         public Dictionary<string, FolderInfo> GetAllFolderInfo()
@@ -142,56 +142,34 @@ namespace ClutterFlock.Core
                 _folderInfoCache[kvp.Key] = kvp.Value;
             }
 
+            // Load folder file cache from the authoritative folder information.
+            foreach (var entry in projectData.FolderInfoCache)
+                _folderFileCache[entry.Key] = entry.Value.Files;
+
             // Load file hash cache
             foreach (var kvp in projectData.FileHashCache)
             {
                 _fileHashCache[kvp.Key] = kvp.Value;
             }
 
-            // Load folder file cache
-            foreach (var kvp in projectData.FolderFileCache)
-            {
-                _folderFileCache[kvp.Key] = kvp.Value;
-            }
-
-            // Rebuild file metadata cache from folder info
-            foreach (var folderInfo in projectData.FolderInfoCache.Values)
-            {
-                foreach (var filePath in folderInfo.Files)
-                {
-                    try
-                    {
-                        var fileInfo = new FileInfo(filePath);
-                        if (fileInfo.Exists)
-                        {
-                            var metadata = new FileMetadata
-                            {
-                                FileName = fileInfo.Name,
-                                Size = fileInfo.Length,
-                                LastWriteTime = fileInfo.LastWriteTime
-                            };
-                            _fileMetadataCache[filePath] = metadata;
-                        }
-                    }
-                    catch
-                    {
-                        // Skip files that can't be accessed
-                        continue;
-                    }
-                }
-            }
+            // Rebuild the file metadata cache from the saved metadata, rather than
+            // rereading folder files that may no longer be accessible.
+            // Restore the saved snapshot without touching potentially disconnected drives.
+            foreach (var entry in projectData.FileMetadataCache)
+                _fileMetadataCache[entry.Key] = entry.Value;
         }
 
         public ProjectData ExportToProjectData(List<string> scanFolders)
         {
             return new ProjectData
             {
-                ScanFolders = scanFolders,
+                ScanFolders = scanFolders.ToList(),
                 FolderInfoCache = GetAllFolderInfo(),
                 FileHashCache = GetAllFileHashes(),
+                FileMetadataCache = _fileMetadataCache.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
                 FolderFileCache = GetAllFolderFiles(),
                 CreatedDate = DateTime.Now
-                // Note: Version, ApplicationName, and LegacyApplicationName should be set by ProjectManager
+                // Note: Version and ApplicationName are set by ProjectManager.
             };
         }
     }

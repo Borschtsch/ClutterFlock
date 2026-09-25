@@ -89,6 +89,8 @@ ClutterFlock/
 
 ## Code Style Guidelines
 
+- Preserve existing comments when editing code. Keep them with the relevant logic and update their wording only when behavior changes.
+
 ### Threading
 - Use `async/await` for all I/O operations
 - `CancellationToken` support for long operations

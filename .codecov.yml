@@ -28,7 +28,7 @@ comment:
   require_head: true
 
 flags:
-  unittests:
+  integration:
     paths:
       - "**/*.cs"
     carryforward: true

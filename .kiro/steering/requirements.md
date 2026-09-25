@@ -35,7 +35,7 @@
 - Progress reporting MUST be implemented for operations >1 second
 
 ### Testing Requirements
-- **Achieve 100% code coverage** for all production code
+- **Use integration/component tests with coverage**; retain the 75% line / 60% branch gate
 - Test with large datasets (100,000+ files)
 - Validate memory usage and performance metrics
 - Test cancellation and cleanup procedures
@@ -43,8 +43,8 @@
 - Test error scenarios (permissions, missing files, network issues)
 
 ### Architecture Constraints
-- Windows-only desktop application (.NET 9, WPF)
-- No external NuGet dependencies (minimal dependency approach)
+- Windows-only desktop application (.NET 10, WPF)
+- Keep runtime dependencies minimal; build and test tooling is allowed
 - Read-only operations (never modify user files)
 - Local processing only (no network communication)
 - Single-instance application (no multi-user support)
@@ -110,12 +110,12 @@ if (!Dispatcher.CheckAccess())
 - [ ] Memory usage validated with large datasets
 - [ ] Error handling covers all file system scenarios
 - [ ] Progress reporting implemented for long operations
-- [ ] **100% code coverage achieved** for all production code
+- [ ] **Integration/component coverage gate passes**
 
 ### Before Release
 - [ ] Performance metrics meet requirements (10k files/min, <2GB RAM, <100ms UI)
 - [ ] Accuracy validation (100% hash-based duplicate detection)
 - [ ] Stress testing with 100,000+ files completed
 - [ ] All error scenarios tested and handled gracefully
-- [ ] **100% code coverage maintained** across all production code
+- [ ] **Integration/component coverage gate passes**
 - [ ] Documentation complete and accurate

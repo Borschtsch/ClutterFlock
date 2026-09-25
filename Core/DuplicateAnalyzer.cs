@@ -244,53 +244,49 @@ namespace ClutterFlock.Core
             var matches = new ConcurrentBag<FileMatch>();
             int processedGroups = 0;
 
-            await Task.Run(() =>
+            await Parallel.ForEachAsync(duplicateGroups.Values, new ParallelOptions
             {
-                Parallel.ForEach(duplicateGroups.Values, new ParallelOptions
+                MaxDegreeOfParallelism = MaxParallelism,
+                CancellationToken = cancellationToken
+            }, async (files, token) =>
+            {
+                var hashGroups = new Dictionary<string, List<string>>();
+                foreach (var file in files.Distinct(StringComparer.OrdinalIgnoreCase))
                 {
-                    MaxDegreeOfParallelism = MaxParallelism,
-                    CancellationToken = cancellationToken
-                }, fileGroup =>
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-
-                    for (int i = 0; i < fileGroup.Count; i++)
+                    token.ThrowIfCancellationRequested();
+                    var hash = _cacheManager.GetFileHash(file);
+                    if (hash == null)
                     {
-                        var folderA = Path.GetDirectoryName(fileGroup[i]) ?? string.Empty;
-                        var hashA = GetOrComputeFileHash(fileGroup[i]);
-                        if (string.IsNullOrEmpty(hashA)) continue;
-
-                        for (int j = i + 1; j < fileGroup.Count; j++)
+                        hash = await ComputeFileHashAsync(file, token);
+                        if (hash.Length > 0) _cacheManager.CacheFileHash(file, hash);
+                    }
+                    if (hash.Length == 0) continue;
+                    if (!hashGroups.TryGetValue(hash, out var group)) hashGroups[hash] = group = new();
+                    group.Add(file);
+                }
+                foreach (var group in hashGroups.Values)
+                    for (var i = 0; i < group.Count; i++)
+                        for (var j = i + 1; j < group.Count; j++)
                         {
-                            var folderB = Path.GetDirectoryName(fileGroup[j]) ?? string.Empty;
-                            if (folderA == folderB) continue; // Skip files in same folder
-
-                            var hashB = GetOrComputeFileHash(fileGroup[j]);
-                            if (hashA == hashB)
-                            {
-                                matches.Add(new FileMatch(fileGroup[i], fileGroup[j]));
-                            }
+                            token.ThrowIfCancellationRequested();
+                            // Skip files in the same folder.
+                            if (!string.Equals(Path.GetDirectoryName(group[i]), Path.GetDirectoryName(group[j]), StringComparison.OrdinalIgnoreCase))
+                                matches.Add(new FileMatch(group[i], group[j]));
                         }
-                    }
-
-                    var current = Interlocked.Increment(ref processedGroups);
-                    if (current % 10 == 0 || current == duplicateGroups.Count)
-                    {
-                        progress?.Report(new AnalysisProgress
-                        {
-                            Phase = AnalysisPhase.ComparingFiles,
-                            StatusMessage = $"Processed {current:N0} of {duplicateGroups.Count:N0} groups... ({matches.Count:N0} matches found)",
-                            CurrentProgress = current,
-                            MaxProgress = duplicateGroups.Count
-                        });
-                    }
+                var current = Interlocked.Increment(ref processedGroups);
+                progress?.Report(new AnalysisProgress
+                {
+                    Phase = AnalysisPhase.ComparingFiles,
+                    StatusMessage = $"Comparing file groups: {current}/{duplicateGroups.Count}",
+                    CurrentProgress = current,
+                    MaxProgress = duplicateGroups.Count
                 });
-            }, cancellationToken);
+            });
 
             return matches.ToList();
         }
 
-        public async Task<List<FolderMatch>> AggregateFolderMatchesAsync(List<FileMatch> fileMatches, ICacheManager cacheManager, IProgress<AnalysisProgress>? progress = null)
+        public async Task<List<FolderMatch>> AggregateFolderMatchesAsync(List<FileMatch> fileMatches, ICacheManager cacheManager, IProgress<AnalysisProgress>? progress = null, CancellationToken cancellationToken = default)
         {
             if (fileMatches.Count == 0) return new List<FolderMatch>();
 
@@ -302,6 +298,9 @@ namespace ClutterFlock.Core
             });
 
             var folderGroups = fileMatches
+                .Select(m => string.Compare(m.PathA, m.PathB, StringComparison.OrdinalIgnoreCase) <= 0
+                    ? m : new FileMatch(m.PathB, m.PathA))
+                .DistinctBy(m => (m.PathA.ToUpperInvariant(), m.PathB.ToUpperInvariant()))
                 .GroupBy(m => (Path.GetDirectoryName(m.PathA) ?? string.Empty, Path.GetDirectoryName(m.PathB) ?? string.Empty))
                 .Where(g => !string.IsNullOrEmpty(g.Key.Item1) && !string.IsNullOrEmpty(g.Key.Item2))
                 .ToList();
@@ -320,6 +319,7 @@ namespace ClutterFlock.Core
 
             foreach (var group in folderGroups)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var leftFolder = group.Key.Item1;
                 var rightFolder = group.Key.Item2;
                 var duplicateFiles = group.ToList();
@@ -329,12 +329,12 @@ namespace ClutterFlock.Core
 
                 var totalLeftFiles = leftInfo?.FileCount ?? 0;
                 var totalRightFiles = rightInfo?.FileCount ?? 0;
-                var folderSize = leftInfo?.TotalSize ?? 0;
+                var folderSize = Math.Max(leftInfo?.TotalSize ?? 0, rightInfo?.TotalSize ?? 0);
 
                 var folderMatch = new FolderMatch(leftFolder, rightFolder, duplicateFiles, 
                     totalLeftFiles, totalRightFiles, folderSize)
                 {
-                    LatestModificationDate = leftInfo?.LatestModificationDate
+                    LatestModificationDate = new[] { leftInfo?.LatestModificationDate, rightInfo?.LatestModificationDate }.Max()
                 };
 
                 folderMatches.Add(folderMatch);
@@ -371,7 +371,7 @@ namespace ClutterFlock.Core
         public List<FolderMatch> AggregateFolderMatches(List<FileMatch> fileMatches, ICacheManager cacheManager)
         {
             // Synchronous wrapper for backward compatibility
-            return AggregateFolderMatchesAsync(fileMatches, cacheManager).GetAwaiter().GetResult();
+            return Task.Run(() => AggregateFolderMatchesAsync(fileMatches, cacheManager)).GetAwaiter().GetResult();
         }
 
         public List<FolderMatch> ApplyFilters(List<FolderMatch> matches, FilterCriteria criteria)
@@ -384,53 +384,42 @@ namespace ClutterFlock.Core
             ).ToList();
         }
 
-        public async Task<string> ComputeFileHashAsync(string filePath)
+        public Task<string> ComputeFileHashAsync(string filePath) => ComputeFileHashAsync(filePath, CancellationToken.None);
+
+        private async Task<string> ComputeFileHashAsync(string filePath, CancellationToken token)
         {
-            return await Task.Run(() => ComputeFileHash(filePath));
-        }
-
-        private string GetOrComputeFileHash(string filePath)
-        {
-            var cachedHash = _cacheManager.GetFileHash(filePath);
-            if (cachedHash != null) return cachedHash;
-
-            var hash = ComputeFileHash(filePath);
-            if (!string.IsNullOrEmpty(hash))
-                _cacheManager.CacheFileHash(filePath, hash);
-
-            return hash;
-        }
-
-        private string ComputeFileHash(string filePath)
-        {
-            try
+            for (var attempt = 0; ; attempt++)
             {
-                // Check if file exists and is accessible
-                if (!File.Exists(filePath))
+                token.ThrowIfCancellationRequested();
+                try
+                {
+                    // Check if file exists and is accessible.
+                    var before = new FileInfo(filePath);
+                    var length = before.Length;
+                    var modified = before.LastWriteTimeUtc;
+                    await using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read,
+                        FileShare.Read, 65536, FileOptions.Asynchronous | FileOptions.SequentialScan);
+                    var hash = Convert.ToHexString(await SHA256.HashDataAsync(stream, token));
+                    before.Refresh();
+                    if (before.Length != length || before.LastWriteTimeUtc != modified)
+                        throw new IOException("File changed while being read.");
+                    var metadata = _cacheManager.GetFileMetadata(filePath);
+                    if (metadata != null && (metadata.Size != length || metadata.LastWriteTime.ToUniversalTime() != modified))
+                        throw new IOException("File changed after scanning; run comparison again.");
+                    return hash;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    // Use error recovery service for file access errors.
+                    var action = await _errorRecoveryService.HandleFileAccessError(filePath, ex);
+                    if (attempt == 0 && action.ShouldRetry)
+                    {
+                        await Task.Delay(action.RetryDelay, token);
+                        continue;
+                    }
+                    _errorRecoveryService.LogSkippedItem(filePath, ex.Message);
                     return string.Empty;
-
-                using var sha = SHA256.Create();
-                using var stream = File.OpenRead(filePath);
-                var hash = sha.ComputeHash(stream);
-                return BitConverter.ToString(hash).Replace("-", string.Empty);
-            }
-            catch (UnauthorizedAccessException ex)
-            {
-                var recoveryAction = _errorRecoveryService.HandleFileAccessError(filePath, ex).Result;
-                _errorRecoveryService.LogSkippedItem(filePath, "File access denied for hash computation");
-                return string.Empty;
-            }
-            catch (IOException ex)
-            {
-                var recoveryAction = _errorRecoveryService.HandleFileAccessError(filePath, ex).Result;
-                _errorRecoveryService.LogSkippedItem(filePath, $"IO error during hash computation: {ex.Message}");
-                return string.Empty;
-            }
-            catch (Exception ex)
-            {
-                var recoveryAction = _errorRecoveryService.HandleFileAccessError(filePath, ex).Result;
-                _errorRecoveryService.LogSkippedItem(filePath, $"Unexpected error during hash computation: {ex.Message}");
-                return string.Empty;
+                }
             }
         }
 

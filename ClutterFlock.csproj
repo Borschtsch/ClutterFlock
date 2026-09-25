@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net9.0-windows10.0.26100.0</TargetFramework>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
     <AssemblyName>ClutterFlock</AssemblyName>
     <RootNamespace>ClutterFlock</RootNamespace>
     <Nullable>enable</Nullable>
@@ -14,8 +14,8 @@
     <RuntimeIdentifiers>win-x64;win-x86;win-arm64</RuntimeIdentifiers>
     
     <!-- Publishing configuration - trimming disabled for WPF/WinForms compatibility -->
-    <PublishSingleFile>true</PublishSingleFile>
-    <SelfContained>true</SelfContained>
+    <PublishSingleFile Condition="'$(RuntimeIdentifier)' != ''">true</PublishSingleFile>
+    <SelfContained Condition="'$(RuntimeIdentifier)' != ''">true</SelfContained>
     <PublishTrimmed>false</PublishTrimmed>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
@@ -34,7 +34,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="MinVer" Version="6.0.0">
+    <PackageReference Include="MinVer" Version="8.0.0">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
     </PackageReference>

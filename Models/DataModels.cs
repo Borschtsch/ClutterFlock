@@ -55,9 +55,9 @@ namespace ClutterFlock.Models
 
         private static string FormatSize(long size)
         {
-            if (size >= 1L << 30) return $"{size / (1L << 30):N1} GB";
-            if (size >= 1L << 20) return $"{size / (1L << 20):N1} MB";
-            if (size >= 1L << 10) return $"{size / (1L << 10):N1} KB";
+            if (size >= 1L << 30) return $"{size / (double)(1L << 30):N1} GB";
+            if (size >= 1L << 20) return $"{size / (double)(1L << 20):N1} MB";
+            if (size >= 1L << 10) return $"{size / (double)(1L << 10):N1} KB";
             return $"{size} B";
         }
     }
@@ -133,6 +133,13 @@ namespace ClutterFlock.Models
         public DateTime CreatedDate { get; set; } = DateTime.Now;
         public string Version { get; set; } = "1.0";
         public string ApplicationName { get; set; } = "ClutterFlock";
+        public Dictionary<string, FileMetadata> FileMetadataCache { get; set; } = new();
+        public List<FileMatch> DuplicateFiles { get; set; } = new();
+        public bool HasAnalysis { get; set; }
+        public FilterCriteria Filters { get; set; } = new();
+        public bool ShowUniqueFiles { get; set; }
+        public string? SelectedLeftFolder { get; set; }
+        public string? SelectedRightFolder { get; set; }
     }
 
     /// <summary>

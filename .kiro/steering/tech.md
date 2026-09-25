@@ -2,7 +2,7 @@
 
 ## Framework & Platform
 
-- **.NET 9.0** with Windows Desktop Runtime
+- **.NET 10.0** with Windows Desktop Runtime
 - **WPF (Windows Presentation Foundation)** for UI
 - **Windows Forms** integration for folder browser dialogs
 - **Target Platform:** Windows 10 version 26100.0 or later
@@ -13,7 +13,7 @@
 - `System.Text.Json` for project file serialization
 - `System.Security.Cryptography` for SHA-256 hashing
 - Built-in .NET threading and async/await patterns
-- No external NuGet packages (minimal dependency approach)
+- MinVer for build versioning; MSTest SDK and Coverlet MTP for integration coverage
 
 ## Build System
 

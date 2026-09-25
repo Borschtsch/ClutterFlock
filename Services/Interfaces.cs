@@ -28,6 +28,7 @@ namespace ClutterFlock.Services
         string? GetFileHash(string filePath);
         void ClearCache();
         void RemoveFolderFromCache(string folderPath);
+        void RetainFolders(IReadOnlyCollection<string> roots);
         Dictionary<string, FolderInfo> GetAllFolderInfo();
         Dictionary<string, string> GetAllFileHashes();
         Dictionary<string, List<string>> GetAllFolderFiles();
@@ -48,7 +49,7 @@ namespace ClutterFlock.Services
     {
         Task<List<FileMatch>> FindDuplicateFilesAsync(List<string> folders, IProgress<AnalysisProgress>? progress, CancellationToken cancellationToken);
         List<FolderMatch> AggregateFolderMatches(List<FileMatch> fileMatches, ICacheManager cacheManager);
-        Task<List<FolderMatch>> AggregateFolderMatchesAsync(List<FileMatch> fileMatches, ICacheManager cacheManager, IProgress<AnalysisProgress>? progress = null);
+        Task<List<FolderMatch>> AggregateFolderMatchesAsync(List<FileMatch> fileMatches, ICacheManager cacheManager, IProgress<AnalysisProgress>? progress = null, CancellationToken cancellationToken = default);
         List<FolderMatch> ApplyFilters(List<FolderMatch> matches, FilterCriteria criteria);
         Task<string> ComputeFileHashAsync(string filePath);
     }
@@ -59,7 +60,7 @@ namespace ClutterFlock.Services
     public interface IProjectManager
     {
         Task SaveProjectAsync(string filePath, ProjectData projectData);
-        Task<ProjectData> LoadProjectAsync(string filePath);
+        Task<ProjectData> LoadProjectAsync(string filePath, CancellationToken cancellationToken = default);
         bool IsValidProjectFile(string filePath);
     }
 

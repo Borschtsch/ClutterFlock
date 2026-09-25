@@ -55,7 +55,8 @@ namespace ClutterFlock.Core
                         foreach (var dir in Directory.GetDirectories(current))
                         {
                             if (cancellationToken.IsCancellationRequested) break;
-                            stack.Push(dir);
+                            if ((File.GetAttributes(dir) & FileAttributes.ReparsePoint) == 0)
+                                stack.Push(dir);
                         }
 
                         // Report progress more frequently for better user feedback
@@ -112,45 +113,26 @@ namespace ClutterFlock.Core
                 MaxProgress = foldersToScan.Count
             });
 
-            // Use SemaphoreSlim to control parallelism 
-            using var semaphore = new SemaphoreSlim(MaxParallelism, MaxParallelism);
+            // Use Parallel.ForEachAsync to control parallelism.
             int scannedCount = 0;
-
-            // Process folders in parallel with controlled concurrency
-            var semaphoreTasks = foldersToScan.Select(async folder =>
+            // Process folders in parallel with controlled concurrency.
+            await Parallel.ForEachAsync(foldersToScan, new ParallelOptions
             {
-                await semaphore.WaitAsync(cancellationToken);
-                try
+                MaxDegreeOfParallelism = MaxParallelism,
+                CancellationToken = cancellationToken
+            }, async (folder, token) =>
+            {
+                var folderInfo = await AnalyzeFolderAsync(folder, token);
+                _cacheManager.CacheFolderInfo(folder, folderInfo);
+                var current = Interlocked.Increment(ref scannedCount);
+                progress?.Report(new AnalysisProgress
                 {
-                    var folderInfo = await AnalyzeFolderAsync(folder, cancellationToken);
-                    _cacheManager.CacheFolderInfo(folder, folderInfo);
-
-                    var currentCount = Interlocked.Increment(ref scannedCount);
-                    if (currentCount % 25 == 0 || currentCount == foldersToScan.Count)
-                    {
-                        progress?.Report(new AnalysisProgress
-                        {
-                            Phase = AnalysisPhase.ScanningFolders,
-                            StatusMessage = $"Building file index: {currentCount}/{foldersToScan.Count} folders...",
-                            CurrentProgress = currentCount,
-                            MaxProgress = foldersToScan.Count
-                        });
-                    }
-                }
-                catch (OperationCanceledException) { throw; }
-                catch (Exception ex)
-                {
-                    // Handle folder scanning errors with recovery service
-                    var recoveryAction = await _errorRecoveryService.HandleFileAccessError(folder, ex);
-                    _errorRecoveryService.LogSkippedItem(folder, $"Folder scan failed: {ex.Message}");
-                }
-                finally
-                {
-                    semaphore.Release();
-                }
+                    Phase = AnalysisPhase.ScanningFolders,
+                    StatusMessage = $"Scanning folders: {current}/{foldersToScan.Count}",
+                    CurrentProgress = current,
+                    MaxProgress = foldersToScan.Count
+                });
             });
-
-            await Task.WhenAll(semaphoreTasks);
 
             return subfolders;
         }
@@ -161,55 +143,51 @@ namespace ClutterFlock.Core
             if (string.IsNullOrWhiteSpace(folderPath)) throw new ArgumentException("Path cannot be empty or whitespace.", nameof(folderPath));
             if (!Directory.Exists(folderPath)) throw new DirectoryNotFoundException($"Directory not found: {folderPath}");
 
-            return await Task.Run(() => AnalyzeFolderSync(folderPath), cancellationToken);
-        }
-
-        private FolderInfo AnalyzeFolderSync(string folderPath)
-        {
-            try
+            var result = new FolderInfo();
+            for (var attempt = 0; ; attempt++)
             {
-                var files = Directory.GetFiles(folderPath, "*.*", SearchOption.TopDirectoryOnly);
-                var totalSize = 0L;
-                var latestDate = DateTime.MinValue;
-
-                // Cache individual file metadata to avoid future file system access
-                foreach (var file in files)
+                try
                 {
-                    try
+                    // Cache individual file metadata to avoid future file system access.
+                    foreach (var file in Directory.EnumerateFiles(folderPath))
                     {
-                        var info = new FileInfo(file);
-                        var metadata = new FileMetadata
+                        cancellationToken.ThrowIfCancellationRequested();
+                        try
                         {
-                            FileName = info.Name,
-                            Size = info.Length,
-                            LastWriteTime = info.LastWriteTime
-                        };
-                        
-                        _cacheManager.CacheFileMetadata(file, metadata);
-                        totalSize += info.Length;
-                        
-                        if (info.LastWriteTime > latestDate)
-                            latestDate = info.LastWriteTime;
+                            var info = new FileInfo(file);
+                            var metadata = new FileMetadata
+                            {
+                                FileName = info.Name,
+                                Size = info.Length,
+                                LastWriteTime = info.LastWriteTime
+                            };
+                            _cacheManager.CacheFileMetadata(file, metadata);
+                            result.Files.Add(file);
+                            result.TotalSize += metadata.Size;
+                            if (result.LatestModificationDate == null || metadata.LastWriteTime > result.LatestModificationDate)
+                                result.LatestModificationDate = metadata.LastWriteTime;
+                        }
+                        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                        {
+                            // Skip files that can't be accessed.
+                            _errorRecoveryService.LogSkippedItem(file, ex.Message);
+                        }
                     }
-                    catch (Exception ex)
+                    return result;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    // Handle folder scanning errors with recovery service.
+                    var action = await _errorRecoveryService.HandleFileAccessError(folderPath, ex);
+                    if (attempt == 0 && action.ShouldRetry)
                     {
-                        // Use error recovery service for file access errors
-                        var recoveryAction = _errorRecoveryService.HandleFileAccessError(file, ex).Result;
-                        _errorRecoveryService.LogSkippedItem(file, $"File access failed: {ex.Message}");
+                        await Task.Delay(action.RetryDelay, cancellationToken);
+                        result = new FolderInfo();
                         continue;
                     }
+                    _errorRecoveryService.LogSkippedItem(folderPath, ex.Message);
+                    return result;
                 }
-
-                return new FolderInfo
-                {
-                    Files = files.ToList(),
-                    TotalSize = totalSize,
-                    LatestModificationDate = latestDate == DateTime.MinValue ? null : latestDate
-                };
-            }
-            catch
-            {
-                return new FolderInfo(); // Return empty info for inaccessible folders
             }
         }
 
@@ -233,7 +211,8 @@ namespace ClutterFlock.Core
                     try
                     {
                         foreach (var dir in Directory.GetDirectories(current))
-                            stack.Push(dir);
+                            if ((File.GetAttributes(dir) & FileAttributes.ReparsePoint) == 0)
+                                stack.Push(dir);
                     }
                     catch (UnauthorizedAccessException)
                     {

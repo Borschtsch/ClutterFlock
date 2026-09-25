@@ -16,14 +16,14 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0  # Required for MinVer to work properly
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6.0.0
         with:
-          dotnet-version: '9.0.x'
+          dotnet-version: '10.0.x'
 
       - name: Restore packages
         run: dotnet restore
@@ -33,77 +33,54 @@ jobs:
 
       - name: Run tests with coverage
         run: |
-          dotnet test ClutterFlock.Tests/ClutterFlock.Tests.csproj -c Release --no-build --verbosity normal /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:CoverletOutput=TestResults/coverage /p:Include="[ClutterFlock]*"
+          pwsh -NoProfile -File scripts/test-integration.ps1 -NoBuild
 
       - name: Upload test results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         if: always()
         with:
           name: test-results
           path: ClutterFlock.Tests/TestResults/*.trx
 
       - name: Upload code coverage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         if: always()
         with:
           name: code-coverage
           path: ClutterFlock.Tests/TestResults/coverage.cobertura.xml
 
       - name: Generate coverage report
-        uses: danielpalme/ReportGenerator-GitHub-Action@5.4.3
+        uses: danielpalme/ReportGenerator-GitHub-Action@5.5.11
         if: always()
         with:
           reports: ClutterFlock.Tests/TestResults/coverage.cobertura.xml
           targetdir: coverage-report
-          reporttypes: Html;Badges
+          reporttypes: Html;Badges;MarkdownSummaryGithub
           verbosity: Info
 
       - name: Upload coverage report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         if: always()
         with:
           name: coverage-report
           path: coverage-report/
 
       - name: Comment coverage on PR
-        uses: marocchino/sticky-pull-request-comment@v2
-        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v3.0.5
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         with:
           recreate: true
           path: coverage-report/SummaryGithub.md
 
       - name: Upload to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v7.1.1
         if: always()
         with:
           files: ClutterFlock.Tests/TestResults/coverage.cobertura.xml
-          flags: unittests
+          flags: integration
           name: ClutterFlock-coverage
           fail_ci_if_error: false
           verbose: true
-
-      - name: Coverage threshold check
-        shell: pwsh
-        if: always()
-        run: |
-          $coverageFile = "ClutterFlock.Tests/TestResults/coverage.cobertura.xml"
-          if (Test-Path $coverageFile) {
-            [xml]$coverage = Get-Content $coverageFile
-            $lineCoverage = [double]$coverage.coverage.'line-rate' * 100
-            Write-Host "📊 Current line coverage: $($lineCoverage.ToString('F2'))%" -ForegroundColor Green
-            
-            # Set minimum coverage threshold (adjust as needed)
-            $minCoverage = 10.0
-            if ($lineCoverage -lt $minCoverage) {
-              Write-Host "⚠️  Coverage $($lineCoverage.ToString('F2'))% is below threshold $minCoverage%" -ForegroundColor Yellow
-              # Uncomment next line to fail build on low coverage:
-              # exit 1
-            } else {
-              Write-Host "✅ Coverage meets minimum threshold" -ForegroundColor Green
-            }
-          } else {
-            Write-Host "❌ Coverage file not found" -ForegroundColor Red
-          }
 
       - name: Publish application
         run: |
@@ -141,7 +118,7 @@ jobs:
           Write-Host "Found Inno Setup at: $innoPath"
           
           # Copy published files to installer directory
-          $publishDir = "bin/Release/net9.0-windows10.0.26100.0/win-x64/publish"
+          $publishDir = "bin/Release/net10.0-windows10.0.26100.0/win-x64/publish"
           $installerDir = "installer/files"
           
           if (Test-Path $installerDir) { Remove-Item $installerDir -Recurse -Force }
@@ -192,7 +169,7 @@ jobs:
           }
           
           # Create ZIP for portable version
-          $publishDir = "bin/Release/net9.0-windows10.0.26100.0/win-x64/publish"
+          $publishDir = "bin/Release/net10.0-windows10.0.26100.0/win-x64/publish"
           if (Test-Path $publishDir) {
             $zipPath = "out/ClutterFlock-Portable-win-x64.zip"
             if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
@@ -201,14 +178,14 @@ jobs:
           }
 
       - name: Upload installer artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: ClutterFlock-Installer
           path: out/ClutterFlock-Setup.exe
           if-no-files-found: error
 
       - name: Upload portable artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: ClutterFlock-Portable
           path: out/ClutterFlock-Portable-win-x64.zip
@@ -220,19 +197,19 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Download installer artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8.0.1
         with:
           name: ClutterFlock-Installer
           path: out
 
       - name: Download portable artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8.0.1
         with:
           name: ClutterFlock-Portable
           path: out
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3.0.3
         with:
           name: ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
@@ -262,7 +239,7 @@ jobs:
             - See the [changelog](https://github.com/Borschtsch/ClutterFlock/releases) for details
             
             ### System Requirements
-            - Windows 10 version 1809 or later (x64)
-            - .NET 9 Runtime (included in installer)
+            - Windows build 26100 or later (x64)
+            - .NET 10 Runtime (included in installer)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

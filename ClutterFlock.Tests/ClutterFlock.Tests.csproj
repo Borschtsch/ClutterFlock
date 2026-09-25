@@ -1,31 +1,18 @@
-<Project Sdk="MSTest.Sdk/3.6.4">
-
+<Project Sdk="MSTest.Sdk/4.4.0">
   <PropertyGroup>
-    <TargetFramework>net9.0-windows10.0.26100</TargetFramework>
-    <LangVersion>latest</LangVersion>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <UseWPF>true</UseWPF>
     <!--
-      Displays error on console in addition to the log file. Note that this feature comes with a performance impact.
+      The MSTest runner displays test failures in the console as well as the TRX report.
+      Detailed diagnostic logging can have a performance impact.
       For more information, visit https://learn.microsoft.com/dotnet/core/testing/unit-testing-platform-integration-dotnet-test#show-failure-per-test
-      -->
-    <TestingPlatformShowTestsFailure>true</TestingPlatformShowTestsFailure>
+    -->
+    <EnableMicrosoftTestingExtensionsCodeCoverage>false</EnableMicrosoftTestingExtensionsCodeCoverage>
   </PropertyGroup>
-
   <ItemGroup>
     <ProjectReference Include="..\ClutterFlock.csproj" />
+    <PackageReference Include="coverlet.MTP" Version="10.0.1" />
   </ItemGroup>
-
-  <ItemGroup>
-    <PackageReference Include="System.Diagnostics.PerformanceCounter" Version="9.0.0" />
-    <PackageReference Include="coverlet.collector" Version="6.0.2">
-      <PrivateAssets>all</PrivateAssets>
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
-    </PackageReference>
-    <PackageReference Include="coverlet.msbuild" Version="6.0.2">
-      <PrivateAssets>all</PrivateAssets>
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
-    </PackageReference>
-  </ItemGroup>
-
 </Project>

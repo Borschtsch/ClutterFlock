@@ -21,11 +21,17 @@ namespace ClutterFlock.ViewModels
     public class MainViewModel : INotifyPropertyChanged, IDisposable
     {
         #region Private Fields
-        private readonly ICacheManager _cacheManager;
-        private readonly IFolderScanner _folderScanner;
-        private readonly IDuplicateAnalyzer _duplicateAnalyzer;
+        private ICacheManager _cacheManager;
+        private IFolderScanner _folderScanner;
+        private IDuplicateAnalyzer _duplicateAnalyzer;
         private readonly IProjectManager _projectManager;
         private readonly IFileComparer _fileComparer;
+        private readonly IErrorRecoveryService _errorRecoveryService;
+        private bool _hasAnalysis;
+        private DateTime _createdDate = DateTime.Now;
+        private int _detailVersion;
+        private int _filterVersion;
+        private int _operationVersion;
         
         private readonly List<string> _scanFolders = new();
         private List<FolderMatch> _allFolderMatches = new();
@@ -101,7 +107,7 @@ namespace ClutterFlock.ViewModels
             set
             {
                 SetProperty(ref _isPopulatingResults, value);
-                OnPropertyChanged(nameof(CanApplyFilters));
+                NotifyAvailability();
             }
         }
 
@@ -110,8 +116,8 @@ namespace ClutterFlock.ViewModels
             get => _selectedFolderMatch;
             set
             {
-                SetProperty(ref _selectedFolderMatch, value);
-                _ = UpdateFileDetailsAsync();
+                if (SetProperty(ref _selectedFolderMatch, value))
+                    _ = UpdateFileDetailsAsync();
             }
         }
 
@@ -156,22 +162,22 @@ namespace ClutterFlock.ViewModels
         }
 
         // Command availability properties
-        public bool CanAddFolders => !OperationInProgress;
-        public bool CanRemoveFolders => !OperationInProgress && ScanFolders.Count > 0;
-        public bool CanRunComparison => !OperationInProgress && ScanFolders.Count > 0;
-        public bool CanSaveProject => !OperationInProgress && ScanFolders.Count > 0;
-        public bool CanLoadProject => !OperationInProgress;
-        public bool CanApplyFilters => !OperationInProgress && !IsPopulatingResults && _allFolderMatches.Count > 0;
-        public bool CanCancel => OperationInProgress;
+        public bool CanAddFolders => !OperationInProgress && !IsPopulatingResults && !_disposed;
+        public bool CanRemoveFolders => !OperationInProgress && !IsPopulatingResults && !_disposed && ScanFolders.Count > 0;
+        public bool CanRunComparison => !OperationInProgress && !IsPopulatingResults && !_disposed && ScanFolders.Count > 0;
+        public bool CanSaveProject => !OperationInProgress && !IsPopulatingResults && !_disposed && ScanFolders.Count > 0;
+        public bool CanLoadProject => !OperationInProgress && !IsPopulatingResults && !_disposed;
+        public bool CanApplyFilters => !OperationInProgress && !IsPopulatingResults && !_disposed && _hasAnalysis;
+        public bool CanCancel => OperationInProgress && _cancellationTokenSource != null;
         #endregion
 
         #region Constructor
         public MainViewModel()
         {
             _cacheManager = new CacheManager();
-            var errorRecoveryService = new ErrorRecoveryService();
-            _folderScanner = new FolderScanner(_cacheManager, errorRecoveryService);
-            _duplicateAnalyzer = new DuplicateAnalyzer(_cacheManager, errorRecoveryService);
+            _errorRecoveryService = new ErrorRecoveryService();
+            _folderScanner = new FolderScanner(_cacheManager, _errorRecoveryService);
+            _duplicateAnalyzer = new DuplicateAnalyzer(_cacheManager, _errorRecoveryService);
             _projectManager = new ProjectManager();
             _fileComparer = new FileComparer();
         }
@@ -180,274 +186,292 @@ namespace ClutterFlock.ViewModels
         #region Public Methods
         public async Task<bool> AddFolderAsync(string folderPath)
         {
-            if (string.IsNullOrEmpty(folderPath) || _scanFolders.Contains(folderPath))
-                return false;
-
+            if (!CanAddFolders || string.IsNullOrWhiteSpace(folderPath)) return false;
             try
             {
-                // Immediately show that operation started
-                StatusMessage = "Starting folder analysis...";
-                OperationInProgress = true;
-                CurrentProgress = 0;
-                MaxProgress = 100;
-                IsProgressIndeterminate = true;
-                
-                _cancellationTokenSource = new CancellationTokenSource();
-
-                var progress = new Progress<AnalysisProgress>(UpdateProgress);
-                
-                // Add a timeout to prevent hanging indefinitely
-                using var timeoutSource = new CancellationTokenSource(TimeSpan.FromMinutes(30)); // 30 minute timeout
-                using var combinedSource = CancellationTokenSource.CreateLinkedTokenSource(
-                    _cancellationTokenSource.Token, 
-                    timeoutSource.Token);
-
-                var subfolders = await _folderScanner.ScanFolderHierarchyAsync(folderPath, progress, combinedSource.Token);
-
+                folderPath = PathUtilities.Normalize(folderPath);
+                if (_scanFolders.Contains(folderPath, StringComparer.OrdinalIgnoreCase)) return false;
+                // Immediately show that operation started.
+                // Keep long scans cancellable without the former fixed 30-minute timeout.
+                var token = BeginOperation("Scanning folder...");
+                var progress = CreateProgress();
+                var staged = new CacheManager();
+                staged.LoadFromProjectData(_cacheManager.ExportToProjectData(_scanFolders));
+                var scanner = new FolderScanner(staged, _errorRecoveryService);
+                var folders = await Task.Run(() => scanner.ScanFolderHierarchyAsync(folderPath, progress, token), token);
+                token.ThrowIfCancellationRequested();
+                SetCache(staged);
                 _scanFolders.Add(folderPath);
                 ScanFolders.Add(folderPath);
-                
-                StatusMessage = $"Added folder with {subfolders.Count} subfolders";
-                ResetProgress();
+                ClearAnalysis();
+                StatusMessage = $"Added root with {folders.Count} folders" + ErrorMessage();
                 return true;
             }
-            catch (OperationCanceledException)
-            {
-                StatusMessage = "Operation cancelled or timed out";
-                ResetProgress();
-                return false;
-            }
-            catch (Exception ex)
-            {
-                StatusMessage = $"Error adding folder: {ex.Message}";
-                ResetProgress();
-                return false;
-            }
-            finally
-            {
-                OperationInProgress = false;
-                _cancellationTokenSource?.Dispose();
-                _cancellationTokenSource = null;
-            }
+            catch (OperationCanceledException) { StatusMessage = "Folder scan cancelled"; return false; }
+            catch (Exception ex) { StatusMessage = $"Error adding folder: {ex.Message}"; return false; }
+            finally { EndOperation(); }
         }
 
         public void RemoveFolder(string folderPath)
         {
-            if (!_scanFolders.Contains(folderPath)) return;
-
-            _scanFolders.Remove(folderPath);
-            ScanFolders.Remove(folderPath);
-            _cacheManager.RemoveFolderFromCache(folderPath);
-            
-            StatusMessage = $"Removed folder: {Path.GetFileName(folderPath)}";
+            if (!CanRemoveFolders) return;
+            folderPath = PathUtilities.Normalize(folderPath);
+            var existing = _scanFolders.FirstOrDefault(p => p.Equals(folderPath, StringComparison.OrdinalIgnoreCase));
+            if (existing == null) return;
+            _scanFolders.Remove(existing);
+            ScanFolders.Remove(existing);
+            // A child root remains valid when its parent is removed, and siblings
+            // such as Photos and Photos-old must never be confused.
+            _cacheManager.RetainFolders(_scanFolders);
+            ClearAnalysis();
+            NotifyAvailability();
+            StatusMessage = $"Removed root: {folderPath}";
         }
 
         public async Task<bool> RunComparisonAsync()
         {
-            if (_scanFolders.Count < 1) return false;
-
+            if (!CanRunComparison) return false;
             try
             {
-                OperationInProgress = true;
-                _cancellationTokenSource = new CancellationTokenSource();
-
-                // Show immediate progress feedback
-                StatusMessage = "Starting comparison analysis...";
-                CurrentProgress = 0;
-                MaxProgress = 100;
-                IsProgressIndeterminate = true;
-
-                var progress = new Progress<AnalysisProgress>(UpdateProgress);
-                
-                // Run the heavy work on a background thread to avoid UI blocking
+                // Show immediate progress feedback.
+                var token = BeginOperation("Refreshing folders and comparing files...");
+                _ = CurrentFilters(); // Reject invalid filters before replacing any analysis state.
+                var roots = _scanFolders.ToList();
+                var progress = CreateProgress();
+                // Run the heavy work on a background thread to avoid UI blocking.
                 var result = await Task.Run(async () =>
                 {
-                    try
-                    {
-                        // Get all cached folders
-                        var allFolders = _cacheManager.GetAllFolderFiles().Keys
-                            .Where(folder => _scanFolders.Any(root => folder.StartsWith(root, StringComparison.OrdinalIgnoreCase)))
-                            .ToList();
-
-                        if (allFolders.Count < 2)
-                        {
-                            return (success: false, message: "Need at least 2 folders to compare", matches: new List<FolderMatch>());
-                        }
-
-                        // Find duplicate files
-                        var fileMatches = await _duplicateAnalyzer.FindDuplicateFilesAsync(allFolders, progress, _cancellationTokenSource.Token);
-                        
-                        // Aggregate into folder matches
-                        var folderMatches = await _duplicateAnalyzer.AggregateFolderMatchesAsync(fileMatches, _cacheManager, progress);
-                        
-                        return (success: true, message: $"Analysis complete: {folderMatches.Count} folder matches found", matches: folderMatches);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        return (success: false, message: "Comparison cancelled", matches: new List<FolderMatch>());
-                    }
-                    catch (Exception ex)
-                    {
-                        return (success: false, message: $"Error during comparison: {ex.Message}", matches: new List<FolderMatch>());
-                    }
-                }, _cancellationTokenSource.Token);
-
-                // Update results on UI thread
+                    // Keep the previous snapshot intact until a complete fresh
+                    // analysis is available. Never reuse saved hashes as live truth.
+                    // Validate that each root still exists before refreshing the snapshot.
+                    var missing = roots.Where(root => !Directory.Exists(root)).ToList();
+                    if (missing.Count > 0)
+                        throw new IOException($"Reconnect the unavailable roots before comparing: {string.Join(", ", missing)}");
+                    var cache = new CacheManager();
+                    var scanner = new FolderScanner(cache, _errorRecoveryService);
+                    foreach (var root in roots)
+                        await scanner.ScanFolderHierarchyAsync(root, progress, token);
+                    var analyzer = new DuplicateAnalyzer(cache, _errorRecoveryService);
+                    // Get all cached folders from this fresh scan and find duplicate files.
+                    var files = await analyzer.FindDuplicateFilesAsync(cache.GetAllFolderInfo().Keys.ToList(), progress, token);
+                    // Aggregate into folder matches.
+                    var matches = await analyzer.AggregateFolderMatchesAsync(files, cache, progress, token);
+                    token.ThrowIfCancellationRequested();
+                    return (cache, matches);
+                }, token);
+                token.ThrowIfCancellationRequested();
+                // Update results on UI thread.
+                SetCache(result.cache);
+                SelectedFolderMatch = null;
+                ClearFileDetails();
                 _allFolderMatches = result.matches;
-                StatusMessage = result.message;
-                
-                if (result.success)
-                {
-                    // Apply filters and populate results
-                    ApplyFilters();
-                    ResetProgress();
-                    return true;
-                }
-                else
-                {
-                    ResetProgress();
-                    return false;
-                }
+                _hasAnalysis = true;
+                // Apply filters and populate results.
+                await ApplyFiltersCoreAsync();
+                StatusMessage = $"Analysis complete: {FilteredFolderMatches.Count} of {_allFolderMatches.Count} folder pairs shown" + ErrorMessage();
+                return true;
             }
-            catch (OperationCanceledException)
-            {
-                StatusMessage = "Comparison cancelled";
-                ResetProgress();
-                return false;
-            }
-            catch (Exception ex)
-            {
-                StatusMessage = $"Error during comparison: {ex.Message}";
-                ResetProgress();
-                return false;
-            }
-            finally
-            {
-                OperationInProgress = false;
-                _cancellationTokenSource?.Dispose();
-                _cancellationTokenSource = null;
-            }
+            catch (OperationCanceledException) { StatusMessage = "Comparison cancelled; previous results retained"; return false; }
+            catch (Exception ex) { StatusMessage = $"Comparison failed; previous results retained. {ex.Message}"; return false; }
+            finally { EndOperation(); }
         }
 
-        public async void ApplyFilters()
+        public async Task ApplyFiltersAsync()
         {
+            if (!CanApplyFilters) return;
+            try { await ApplyFiltersCoreAsync(); }
+            catch (Exception ex) { StatusMessage = $"Error applying filters: {ex.Message}"; }
+        }
+
+        private async Task ApplyFiltersCoreAsync()
+        {
+            var version = ++_filterVersion;
+            // Track filter application so controls remain disabled until it completes.
+            IsPopulatingResults = true;
             try
             {
-                IsPopulatingResults = true;
-                
-                // Show progress for filter application
-                CurrentProgress = 0;
-                MaxProgress = 100;
-                IsProgressIndeterminate = false;
-                
-                // Run filtering on background thread
-                var filteredMatches = await Task.Run(() =>
-                {
-                    var criteria = new FilterCriteria
-                    {
-                        MinimumSimilarityPercent = MinimumSimilarity,
-                        MinimumSizeBytes = (long)(MinimumSizeMB * 1024 * 1024)
-                    };
-
-                    return _duplicateAnalyzer.ApplyFilters(_allFolderMatches, criteria);
-                });
-                
-                // Clear existing results on UI thread
+                var criteria = CurrentFilters();
+                var matches = _allFolderMatches;
+                // Run filtering on background thread.
+                var filtered = await Task.Run(() => _duplicateAnalyzer.ApplyFilters(matches, criteria));
+                if (_disposed || version != _filterVersion) return;
+                // Clear existing results on UI thread.
                 FilteredFolderMatches.Clear();
-                
-                // Add results in batches to keep UI responsive
-                const int batchSize = 50;
-                for (int i = 0; i < filteredMatches.Count; i += batchSize)
+                // Add results in batches to keep UI responsive.
+                for (var i = 0; i < filtered.Count; i++)
                 {
-                    var batch = filteredMatches.Skip(i).Take(batchSize);
-                    foreach (var match in batch)
-                    {
-                        FilteredFolderMatches.Add(match);
-                    }
-                    
-                    // Update progress
-                    CurrentProgress = filteredMatches.Count > 0 ? (int)((double)(i + batchSize) / filteredMatches.Count * 100) : 100;
-                    StatusMessage = $"Populating results: {Math.Min(i + batchSize, filteredMatches.Count):N0} of {filteredMatches.Count:N0} groups";
-                    
-                    // Allow UI to update - use Dispatcher.Yield for WPF
-                    await System.Windows.Threading.Dispatcher.Yield();
+                    if (_disposed || version != _filterVersion) return;
+                    FilteredFolderMatches.Add(filtered[i]);
+                    // Allow UI to update by yielding to the captured UI context.
+                    if (i % 50 == 49) await Task.Yield();
                 }
-
-                StatusMessage = $"Filter applied: showing {filteredMatches.Count:N0} groups";
-                ResetProgress();
-            }
-            catch (Exception ex)
-            {
-                StatusMessage = $"Error applying filters: {ex.Message}";
-                ResetProgress();
+                if (SelectedFolderMatch != null && !filtered.Contains(SelectedFolderMatch))
+                    SelectedFolderMatch = null;
+                // Update status when result population completes.
+                StatusMessage = $"Filter applied: showing {filtered.Count} folder pairs";
             }
             finally
             {
-                IsPopulatingResults = false;
+                if (version == _filterVersion) IsPopulatingResults = false;
             }
         }
 
         public void CancelOperation()
         {
-            _cancellationTokenSource?.Cancel();
+            if (_cancellationTokenSource == null) return;
+            _cancellationTokenSource.Cancel();
             StatusMessage = "Cancelling operation...";
         }
 
         public async Task<bool> SaveProjectAsync(string filePath)
         {
+            if (!CanSaveProject) return false;
             try
             {
-                var projectData = _cacheManager.ExportToProjectData(_scanFolders);
-                await _projectManager.SaveProjectAsync(filePath, projectData);
+                BeginOperation("Saving project...", cancellable: false);
+                var data = _cacheManager.ExportToProjectData(_scanFolders);
+                data.CreatedDate = _createdDate;
+                data.DuplicateFiles = _allFolderMatches.SelectMany(m => m.DuplicateFiles).ToList();
+                data.HasAnalysis = _hasAnalysis;
+                data.Filters = CurrentFilters();
+                data.ShowUniqueFiles = ShowUniqueFiles;
+                data.SelectedLeftFolder = SelectedFolderMatch?.LeftFolder;
+                data.SelectedRightFolder = SelectedFolderMatch?.RightFolder;
+                await Task.Run(() => _projectManager.SaveProjectAsync(filePath, data));
                 StatusMessage = "Project saved successfully";
                 return true;
             }
-            catch (Exception ex)
-            {
-                StatusMessage = $"Error saving project: {ex.Message}";
-                return false;
-            }
+            catch (Exception ex) { StatusMessage = $"Error saving project: {ex.Message}"; return false; }
+            finally { EndOperation(); }
         }
 
         public async Task<bool> LoadProjectAsync(string filePath)
         {
+            if (!CanLoadProject) return false;
             try
             {
-                var projectData = await _projectManager.LoadProjectAsync(filePath);
-                _cacheManager.LoadFromProjectData(projectData);
-                
-                // Clear existing results
-                _allFolderMatches.Clear();
-                FilteredFolderMatches.Clear();
-                _allFileDetails.Clear();
-                FileDetails.Clear();
-                ClearFileDetails();
-                
+                var token = BeginOperation("Loading project...");
+                var restored = await Task.Run(async () =>
+                {
+                    var data = await _projectManager.LoadProjectAsync(filePath, token);
+                    token.ThrowIfCancellationRequested();
+                    var cache = new CacheManager();
+                    cache.LoadFromProjectData(data);
+                    var matches = await new DuplicateAnalyzer(cache, _errorRecoveryService)
+                        .AggregateFolderMatchesAsync(data.DuplicateFiles, cache, cancellationToken: token);
+                    return (data, cache, matches);
+                }, token);
+                token.ThrowIfCancellationRequested();
+                // Only replace the active project after parsing and validation succeed.
+                SetCache(restored.cache);
+                // Clear existing results.
+                ClearAnalysis();
                 _scanFolders.Clear();
                 ScanFolders.Clear();
-                
-                foreach (var folder in projectData.ScanFolders)
+                // Retain saved roots even when their drives are unavailable;
+                // folder existence is validated when a fresh comparison is requested.
+                foreach (var root in restored.data.ScanFolders)
                 {
-                    // Validate that folder still exists
-                    if (Directory.Exists(folder))
-                    {
-                        _scanFolders.Add(folder);
-                        ScanFolders.Add(folder);
-                    }
-                    else
-                    {
-                        StatusMessage = $"Warning: Folder no longer exists: {folder}";
-                    }
+                    _scanFolders.Add(root);
+                    ScanFolders.Add(root);
                 }
-
-                StatusMessage = $"Project loaded successfully - {ScanFolders.Count} folders available";
+                _createdDate = restored.data.CreatedDate;
+                _hasAnalysis = restored.data.HasAnalysis;
+                _allFolderMatches = restored.matches;
+                MinimumSimilarity = restored.data.Filters.MinimumSimilarityPercent;
+                MinimumSizeMB = restored.data.Filters.MinimumSizeBytes / (1024.0 * 1024);
+                ShowUniqueFiles = restored.data.ShowUniqueFiles;
+                await ApplyFiltersCoreAsync();
+                await SelectFolderMatchAsync(FilteredFolderMatches.FirstOrDefault(m =>
+                    string.Equals(m.LeftFolder, restored.data.SelectedLeftFolder, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(m.RightFolder, restored.data.SelectedRightFolder, StringComparison.OrdinalIgnoreCase)));
+                StatusMessage = $"Project restored: {ScanFolders.Count} roots, {FilteredFolderMatches.Count} folder pairs. Showing the saved snapshot; run comparison to refresh.";
                 return true;
             }
-            catch (Exception ex)
+            catch (OperationCanceledException) { StatusMessage = "Project load cancelled; previous project retained"; return false; }
+            catch (Exception ex) { StatusMessage = $"Error loading project; previous project retained. {ex.Message}"; return false; }
+            finally { EndOperation(); }
+        }
+
+        public Task SelectFolderMatchAsync(FolderMatch? match)
+        {
+            SetProperty(ref _selectedFolderMatch, match, nameof(SelectedFolderMatch));
+            return UpdateFileDetailsAsync();
+        }
+
+        private FilterCriteria CurrentFilters()
+        {
+            if (!double.IsFinite(MinimumSimilarity) || MinimumSimilarity is < 0 or > 100 ||
+                !double.IsFinite(MinimumSizeMB) || MinimumSizeMB < 0 || MinimumSizeMB >= long.MaxValue / (1024.0 * 1024))
+                throw new ArgumentOutOfRangeException(nameof(MinimumSimilarity), "Enter a similarity from 0 to 100 and a nonnegative folder size.");
+            return new FilterCriteria
             {
-                StatusMessage = $"Error loading project: {ex.Message}";
-                return false;
-            }
+                MinimumSimilarityPercent = MinimumSimilarity,
+                MinimumSizeBytes = (long)(MinimumSizeMB * 1024 * 1024)
+            };
+        }
+
+        private void SetCache(ICacheManager cache)
+        {
+            _cacheManager = cache;
+            _folderScanner = new FolderScanner(cache, _errorRecoveryService);
+            _duplicateAnalyzer = new DuplicateAnalyzer(cache, _errorRecoveryService);
+        }
+
+        private CancellationToken BeginOperation(string message, bool cancellable = true)
+        {
+            _operationVersion++;
+            _cancellationTokenSource = cancellable ? new CancellationTokenSource() : null;
+            _errorRecoveryService.ClearErrorSummary();
+            OperationInProgress = true;
+            StatusMessage = message;
+            IsProgressIndeterminate = true;
+            return _cancellationTokenSource?.Token ?? CancellationToken.None;
+        }
+
+        private void EndOperation()
+        {
+            _operationVersion++;
+            _cancellationTokenSource?.Dispose();
+            _cancellationTokenSource = null;
+            OperationInProgress = false;
+            ResetProgress();
+        }
+
+        private IProgress<AnalysisProgress> CreateProgress()
+        {
+            var version = _operationVersion;
+            return new Progress<AnalysisProgress>(p =>
+            {
+                if (!_disposed && OperationInProgress && version == _operationVersion) UpdateProgress(p);
+            });
+        }
+
+        private string ErrorMessage()
+        {
+            var errors = _errorRecoveryService.GetErrorSummary();
+            return errors.HasErrors ? $". Skipped {errors.SkippedFiles} inaccessible items; results may be incomplete." : "";
+        }
+
+        private void ClearAnalysis()
+        {
+            ++_detailVersion;
+            _hasAnalysis = false;
+            _allFolderMatches.Clear();
+            FilteredFolderMatches.Clear();
+            SelectedFolderMatch = null;
+            ClearFileDetails();
+        }
+
+        private void NotifyAvailability()
+        {
+            OnPropertyChanged(nameof(CanAddFolders));
+            OnPropertyChanged(nameof(CanRemoveFolders));
+            OnPropertyChanged(nameof(CanRunComparison));
+            OnPropertyChanged(nameof(CanSaveProject));
+            OnPropertyChanged(nameof(CanLoadProject));
+            OnPropertyChanged(nameof(CanApplyFilters));
+            OnPropertyChanged(nameof(CanCancel));
         }
         #endregion
 
@@ -483,60 +507,29 @@ namespace ClutterFlock.ViewModels
 
         private async Task UpdateFileDetailsAsync()
         {
-            if (SelectedFolderMatch == null)
-            {
-                ClearFileDetails();
-                return;
-            }
-
+            var version = ++_detailVersion;
+            var match = SelectedFolderMatch;
+            ClearFileDetails();
+            if (match == null || _disposed) return;
             try
             {
-                var leftFolder = SelectedFolderMatch.LeftFolder;
-                var rightFolder = SelectedFolderMatch.RightFolder;
-                var duplicateFiles = SelectedFolderMatch.DuplicateFiles;
-
-                // Validate folders still exist
-                if (!Directory.Exists(leftFolder) || !Directory.Exists(rightFolder))
-                {
-                    StatusMessage = "One or both selected folders no longer exist";
-                    ClearFileDetails();
-                    return;
-                }
-
-                // Update folder displays
-                var leftInfo = _cacheManager.GetFolderInfo(leftFolder);
-                var rightInfo = _cacheManager.GetFolderInfo(rightFolder);
-                
-                LeftFolderDisplay = leftInfo?.LatestModificationDate != null
-                    ? $"{leftFolder} ({leftInfo.LatestModificationDate:yyyy-MM-dd HH:mm})"
-                    : leftFolder;
-                    
-                RightFolderDisplay = rightInfo?.LatestModificationDate != null
-                    ? $"{rightFolder} ({rightInfo.LatestModificationDate:yyyy-MM-dd HH:mm})"
-                    : rightFolder;
-
-                // Build file comparison on background thread
-                var fileDetails = await Task.Run(() =>
-                {
-                    try
-                    {
-                        return _fileComparer.BuildFileComparison(leftFolder, rightFolder, duplicateFiles, _cacheManager);
-                    }
-                    catch (Exception ex)
-                    {
-                        // Log the error but don't crash the UI
-                        System.Diagnostics.Debug.WriteLine($"Error building file comparison: {ex.Message}");
-                        return new List<FileDetailInfo>();
-                    }
-                });
-
-                _allFileDetails = fileDetails;
+                // Use saved metadata so folder details remain available offline.
+                var cache = _cacheManager;
+                // Build file comparison on background thread.
+                var details = await Task.Run(() => _fileComparer.BuildFileComparison(
+                    match.LeftFolder, match.RightFolder, match.DuplicateFiles, cache));
+                if (_disposed || version != _detailVersion) return;
+                // Update folder displays.
+                LeftFolderDisplay = match.LeftFolder;
+                RightFolderDisplay = match.RightFolder;
+                _allFileDetails = details;
                 FilterFileDetails();
             }
             catch (Exception ex)
             {
-                StatusMessage = $"Error updating file details: {ex.Message}";
-                ClearFileDetails();
+                // Report the error but don't crash the UI.
+                if (version == _detailVersion && !_disposed)
+                    StatusMessage = $"Error updating file details: {ex.Message}";
             }
         }
 
@@ -603,9 +596,10 @@ namespace ClutterFlock.ViewModels
                     // Cancel any ongoing operations
                     CancelOperation();
                     
-                    // Dispose cancellation token source
-                    _cancellationTokenSource?.Dispose();
-                    _cancellationTokenSource = null;
+                    // Dispose the cancellation token source when the running operation ends.
+                    // The running operation owns and disposes its token source.
+                    ++_detailVersion;
+                    ++_filterVersion;
                 }
                 _disposed = true;
             }

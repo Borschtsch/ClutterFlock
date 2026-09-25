@@ -369,7 +369,7 @@ namespace ClutterFlock.Core
                     if (parts.Length > 0)
                     {
                         var serverName = parts[0];
-                        var ping = new Ping();
+                        using var ping = new Ping();
                         var reply = await ping.SendPingAsync(serverName, 5000);
                         return reply.Status == IPStatus.Success;
                     }
