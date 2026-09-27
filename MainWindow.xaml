@@ -1,218 +1,274 @@
 ﻿<Window x:Class="ClutterFlock.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:ctrl="clr-namespace:System.Windows.Controls;assembly=PresentationFramework"
-        Title="ClutterFlock" Height="980" Width="1350" MinWidth="800" MinHeight="600">
-    <Grid>
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" MinHeight="120" MaxHeight="180"/> <!-- Top panel: Compact -->
-            <RowDefinition Height="*"/>    <!-- Bottom panel: Results + Files -->
-        </Grid.RowDefinitions>
-
-        <!-- TOP PANEL - Optimized for space -->
-        <Grid Grid.Row="0" Margin="5">
+        Title="ClutterFlock" Width="1500" Height="960" MinWidth="1150" MinHeight="720"
+        Background="#F3F5F8" FontFamily="Segoe UI" FontSize="13" Foreground="#1E293B"
+        AllowDrop="True" Drop="Locations_Drop">
+    <Window.Resources>
+        <Style TargetType="Button">
+            <Setter Property="Padding" Value="12,6"/><Setter Property="Margin" Value="0,0,6,0"/>
+            <Setter Property="MinHeight" Value="32"/><Setter Property="Background" Value="White"/>
+            <Setter Property="BorderBrush" Value="#CBD5E1"/><Setter Property="Foreground" Value="#1E293B"/>
+        </Style>
+        <Style x:Key="DangerButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Foreground" Value="#9F2424"/>
+            <Setter Property="BorderBrush" Value="#DCBABA"/>
+            <Setter Property="Template">
+                <Setter.Value><ControlTemplate TargetType="Button">
+                    <Border x:Name="surface" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1" Padding="{TemplateBinding Padding}" CornerRadius="2">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="True"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="surface" Property="BorderBrush" Value="#B42318"/><Setter TargetName="surface" Property="Background" Value="#FEE4E2"/></Trigger>
+                        <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="surface" Property="Background" Value="#B42318"/><Setter TargetName="surface" Property="BorderBrush" Value="#B42318"/><Setter Property="Foreground" Value="White"/></Trigger>
+                        <Trigger Property="IsPressed" Value="True"><Setter TargetName="surface" Property="Background" Value="#7A271A"/><Setter Property="Foreground" Value="White"/></Trigger>
+                        <Trigger Property="IsEnabled" Value="False"><Setter TargetName="surface" Property="Background" Value="#F3F4F6"/><Setter TargetName="surface" Property="BorderBrush" Value="#D1D5DB"/><Setter Property="Foreground" Value="#9CA3AF"/></Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate></Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType="TextBox"><Setter Property="Padding" Value="7,5"/><Setter Property="BorderBrush" Value="#CBD5E1"/></Style>
+        <Style TargetType="ComboBox"><Setter Property="Padding" Value="6,4"/><Setter Property="MinHeight" Value="30"/></Style>
+        <Style TargetType="ListView"><Setter Property="BorderThickness" Value="0"/><Setter Property="VirtualizingPanel.IsVirtualizing" Value="True"/><Setter Property="VirtualizingPanel.VirtualizationMode" Value="Recycling"/><Setter Property="ScrollViewer.CanContentScroll" Value="True"/></Style>
+        <Style TargetType="ListBox"><Setter Property="BorderBrush" Value="#E2E8F0"/><Setter Property="VirtualizingPanel.IsVirtualizing" Value="True"/><Setter Property="VirtualizingPanel.VirtualizationMode" Value="Recycling"/></Style>
+        <Style x:Key="Caption" TargetType="TextBlock"><Setter Property="Foreground" Value="#526174"/><Setter Property="FontSize" Value="12"/><Setter Property="TextWrapping" Value="Wrap"/></Style>
+        <Style x:Key="Section" TargetType="TextBlock"><Setter Property="FontSize" Value="16"/><Setter Property="FontWeight" Value="SemiBold"/><Setter Property="Margin" Value="0,0,0,10"/></Style>
+    </Window.Resources>
+    <Grid Background="#F3F5F8">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <!-- Project identity and persistent snapshot context. -->
+        <Border Background="White" BorderBrush="#DCE3EB" BorderThickness="0,0,0,1" Padding="18,12">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button Content="_New" Click="NewProject_Click" IsEnabled="{Binding CanLoadProject}"/>
+                    <Button x:Name="btnLoadProject" Content="_Open…" Click="LoadProject_Click"/>
+                    <Button x:Name="btnSaveProject" Content="_Save" Click="SaveProject_Click"/>
+                    <Button Content="Save as…" Click="SaveAs_Click" IsEnabled="{Binding CanSaveProject}"/>
+                </StackPanel>
+                <StackPanel><TextBlock Text="CLUTTERFLOCK / WORKSPACE" Foreground="#426B9C" FontSize="11" FontWeight="Bold"/>
+                    <TextBlock Text="{Binding ProjectTitle}" FontSize="21" FontWeight="SemiBold" Margin="0,3"/>
+                    <TextBlock Text="{Binding SaveSummary}" Style="{StaticResource Caption}"/>
+                </StackPanel>
+            </DockPanel>
+        </Border>
+        <Border Grid.Row="1" Background="#EAF1F9" Padding="18,10" BorderBrush="#D4E1EF" BorderThickness="0,0,0,1">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button x:Name="btnAnalysisDetails" Content="Analysis details" Click="AnalysisDetails_Click"/>
+                    <Button x:Name="btnCancel" Content="Cancel" Click="Cancel_Click" Visibility="Collapsed"/>
+                    <Button x:Name="btnRunComparison" Content="Compare / refresh" Background="#245EA8" Foreground="White" BorderBrush="#245EA8" Click="RunComparison_Click" ToolTip="Scan prepared locations and verify same-name file contents. Previous results remain until completion."/>
+                </StackPanel>
+                <StackPanel Margin="0,0,12,0">
+                    <TextBlock Text="{Binding SnapshotSummary}" TextWrapping="Wrap" FontWeight="SemiBold"/>
+                    <TextBlock Text="{Binding CoverageSummary}" Style="{StaticResource Caption}" Margin="0,3,0,0"/>
+                </StackPanel>
+            </DockPanel>
+        </Border>
+        <Grid x:Name="workspaceGrid" Grid.Row="2" Margin="12" IsEnabled="{Binding CanEditWorkspace}">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="300"/> <!-- Folders list (increased from 250px) -->
-                <ColumnDefinition Width="2*"/>  <!-- Buttons and status (constrained from *) -->
+                <ColumnDefinition x:Name="comparisonsColumn" Width="640" MinWidth="380"/>
+                <ColumnDefinition Width="8"/><ColumnDefinition MinWidth="380"/>
             </Grid.ColumnDefinitions>
-
-            <!-- Left: Folders List (responsive height) -->
-            <ctrl:GroupBox Header="Folders to Scan" Grid.Column="0" MinHeight="120">
-                <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
-                    <ctrl:ListBox x:Name="listBoxFolders"/>
-                </ScrollViewer>
-            </ctrl:GroupBox>
-
-            <!-- Right: Compact Buttons and Status -->
-            <Grid Grid.Column="1" Margin="10,0,0,0">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/> <!-- Buttons -->
-                    <RowDefinition Height="Auto"/> <!-- Status -->
-                </Grid.RowDefinitions>
-
-                <!-- Compact button layout -->
-                <WrapPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
-                    <ctrl:Button x:Name="btnAddFolder" Content="Add Folder" Width="100" Height="28" Margin="2" Click="AddFolder_Click"/>
-                    <ctrl:Button x:Name="btnRemoveFolder" Content="Remove Folder" Width="100" Height="28" Margin="2" Click="RemoveFolder_Click"/>
-                    <ctrl:Button x:Name="btnRunComparison" Content="Run Comparison" Width="120" Height="28" Margin="2" Click="RunComparison_Click"/>
-                    <ctrl:Button x:Name="btnCancel" Content="Cancel" Width="80" Height="28" Margin="2" Click="Cancel_Click" Visibility="Collapsed"/>
-                    <ctrl:Button x:Name="btnSaveProject" Content="Save Project" Width="100" Height="28" Margin="2" Click="SaveProject_Click"/>
-                    <ctrl:Button x:Name="btnLoadProject" Content="Load Project" Width="100" Height="28" Margin="2" Click="LoadProject_Click"/>
-                </WrapPanel>
-                
-                <!-- Compact status bar -->
-                <Grid Grid.Row="1">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto"/> <!-- FCF Spinner -->
-                        <ColumnDefinition Width="250"/>  <!-- Progress bar -->
-                        <ColumnDefinition Width="*"/>    <!-- Status text -->
-                    </Grid.ColumnDefinitions>
-
-                    <ctrl:ProgressBar x:Name="mainProgressBar" Height="16" Grid.Column="1"/>
-                    <ctrl:TextBlock x:Name="statusLabel" Text="Status: Idle" Grid.Column="2" Margin="8,0,0,0" VerticalAlignment="Center" FontSize="11"/>
-                </Grid>
-            </Grid>
-        </Grid>
-
-        <!-- BOTTOM PANEL: Optimized Results and Files -->
-        <Grid Grid.Row="1" Margin="5,0,5,5">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="1.5*"/> <!-- Results panel (reduced) -->
-                <ColumnDefinition Width="6"/>    <!-- Splitter -->
-                <ColumnDefinition Width="4*"/>   <!-- Files panel (increased significantly) -->
-            </Grid.ColumnDefinitions>
-
-            <!-- Results Panel - Compact -->
-            <Grid Grid.Column="0">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/> <!-- Compact filters -->
-                    <RowDefinition Height="*"/>    <!-- Results list -->
-                </Grid.RowDefinitions>
-
-                <!-- Compact filters -->
-                <WrapPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,5">
-                    <ctrl:TextBlock Text="Size(MB):" VerticalAlignment="Center" Margin="0,0,3,0" FontSize="11"/>
-                    <ctrl:TextBox x:Name="txtMinSize" Width="50" Height="22" Text="1" Margin="0,0,8,0" TextAlignment="Right" VerticalContentAlignment="Center" FontSize="11"/>
-                    <ctrl:TextBlock Text="Similarity(%):" VerticalAlignment="Center" Margin="0,0,3,0" FontSize="11"/>
-                    <ctrl:TextBox x:Name="txtMinSimilarity" Width="50" Height="22" Text="50" Margin="0,0,8,0" TextAlignment="Right" VerticalContentAlignment="Center" FontSize="11"/>
-                    <ctrl:Button x:Name="btnApplyFilters" Content="Filter" Width="60" Height="22" Click="ApplyFilters_Click" Margin="0,0,8,0" FontSize="11"/>
-                    <ctrl:Button x:Name="btnClearSort" Content="Clear Sort" Width="70" Height="22" Click="ClearSort_Click" FontSize="11"
-                                ToolTip="Clear all sorting and return to default view"/>
-                    
-                    <!-- Folder sorting guidance -->
-                    <ctrl:TextBlock Text="Sort:" VerticalAlignment="Center" Margin="8,0,3,0" FontWeight="Bold" FontSize="11"/>
-                    <ctrl:TextBlock Text="Ctrl+Click for multi-sort" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="10" Foreground="Gray"/>
-                </WrapPanel>
-
-                <!-- Compact Results List -->
-                <ctrl:ListView x:Name="listViewFolderMatches" Grid.Row="1" SelectionChanged="listViewFolderMatches_SelectionChanged" FontSize="11"
-                               VirtualizingPanel.IsVirtualizing="True"
-                               VirtualizingPanel.VirtualizationMode="Recycling"
-                               ScrollViewer.CanContentScroll="True">
-                    <ctrl:ListView.View>
-                        <ctrl:GridView>
-                            <ctrl:GridViewColumn Header="Master Folder" DisplayMemberBinding="{Binding LeftFolder}" Width="280"/>
-                            <ctrl:GridViewColumn Header="Similarity %" DisplayMemberBinding="{Binding SimilarityPercentage, StringFormat=F1}" Width="80"/>
-                            <ctrl:GridViewColumn Header="Size" DisplayMemberBinding="{Binding SizeDisplay}" Width="70"/>
-                        </ctrl:GridView>
-                    </ctrl:ListView.View>
-                    <ctrl:ListView.Resources>
-                        <Style TargetType="{x:Type GridViewColumnHeader}">
-                            <Setter Property="ToolTip" Value="Click to sort, Ctrl+Click for multi-column sorting"/>
-                            <EventSetter Event="Click" Handler="GridViewColumnHeader_Click"/>
-                            <Setter Property="FontSize" Value="11"/>
-                        </Style>
-                    </ctrl:ListView.Resources>
-                </ctrl:ListView>
-            </Grid>
-
-            <!-- Splitter -->
-            <GridSplitter Grid.Column="1" Width="6" HorizontalAlignment="Center" VerticalAlignment="Stretch" Background="#E0E0E0"/>
-
-            <!-- Files Panel - Maximized Space -->
-            <ctrl:GroupBox Header="File Comparison" Grid.Column="2" FontSize="12">
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/> <!-- Compact folder paths -->
-                        <RowDefinition Height="Auto"/> <!-- Options -->
-                        <RowDefinition Height="*"/>    <!-- Files list - maximum space -->
-                    </Grid.RowDefinitions>
-                    
-                    <!-- Compact Folder Paths -->
-                    <Grid Grid.Row="0" Margin="3">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                        </Grid.RowDefinitions>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="50"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-                        
-                        <ctrl:TextBlock Text="Left:" Grid.Row="0" Grid.Column="0" VerticalAlignment="Center" FontWeight="Bold" FontSize="11"/>
-                        <Border Grid.Row="0" Grid.Column="1" Margin="0,0,0,2" BorderBrush="#CCCCCC" BorderThickness="1" Background="#F5F5F5" Padding="2">
-                            <ctrl:TextBlock x:Name="txtLeftFolderDisplay" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" FontSize="10"
-                                           ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
-                        </Border>
-                        
-                        <ctrl:TextBlock Text="Right:" Grid.Row="1" Grid.Column="0" VerticalAlignment="Center" FontWeight="Bold" FontSize="11"/>
-                        <Border Grid.Row="1" Grid.Column="1" Margin="0,2,0,0" BorderBrush="#CCCCCC" BorderThickness="1" Background="#F5F5F5" Padding="2">
-                            <ctrl:TextBlock x:Name="txtRightFolderDisplay" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" FontSize="10"
-                                           ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
-                        </Border>
+            <!-- Locations and searchable analyzed folders provide context before pair inspection. -->
+            <!-- Folder pairs retain both identities and explain directional coverage. -->
+            <Border Grid.Column="0" Background="White" BorderBrush="#DCE3EB" BorderThickness="1" Padding="12">
+                <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                    <StackPanel>
+                        <Expander x:Name="locationsExpander" Header="Locations — add, label or filter" Margin="0,0,0,12">
+                            <StackPanel Margin="0,10,0,0">
+                    <StackPanel>
+                        <WrapPanel><Button x:Name="btnAddFolder" Content="Add…" Click="AddFolder_Click"/><Button x:Name="btnRemoveFolder" Content="Remove" Click="RemoveFolder_Click"/></WrapPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,8" IsEnabled="{Binding CanAddFolders}">
+                            <TextBlock Text="Automatic speed tuning per storage device" Style="{StaticResource Caption}" TextWrapping="Wrap"
+                                       ToolTip="Each device starts with one worker. Scan and read throughput adjusts workers with at least one I/O subworker per drive. CPU-heavy work has a separate limit leaving one logical CPU for the UI and other work. Current workers appear in progress."/>
+                        </StackPanel>
+                        <TextBlock Text="Add several folders or drop them here. Scanning starts with Compare." Style="{StaticResource Caption}" Margin="0,8"/>
+                    </StackPanel>
+                    <ListBox x:Name="listBoxFolders"  MaxHeight="120" SelectionChanged="Location_SelectionChanged" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <ListBox.ItemTemplate><DataTemplate><StackPanel Margin="3,5" ToolTip="{Binding Path}"><TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/><TextBlock Text="{Binding Path}" Style="{StaticResource Caption}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/></StackPanel></DataTemplate></ListBox.ItemTemplate>
+                        <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem"><Setter Property="HorizontalContentAlignment" Value="Stretch"/></Style></ListBox.ItemContainerStyle>
+                    </ListBox>
+                    <Expander  Header="Location label and access" IsEnabled="{Binding CanAddFolders}" Margin="0,8,0,12"><StackPanel Margin="0,8,0,0">
+                        <TextBox x:Name="locationLabel" ToolTip="Label for the selected location" AutomationProperties.Name="Location label"/>
+                        <WrapPanel Margin="0,6,0,0"><Button Content="Set label" Click="RenameLocation_Click" Padding="8,4"/><Button Content="Check access" Click="CheckLocation_Click" Padding="8,4"/></WrapPanel>
+                        <TextBlock x:Name="locationAccess" Text="Availability unchecked" Style="{StaticResource Caption}" Margin="0,5,0,0"/>
+                    </StackPanel></Expander>
+                                <Button Content="All locations / folder pairs" Click="AllFolders_Click" HorizontalAlignment="Left"/>
+                            </StackPanel>
+                        </Expander>
+                        <DockPanel><TextBlock Text="Folder comparisons" Style="{StaticResource Section}"/><TextBlock Text="{Binding ResultsSummary}" HorizontalAlignment="Right" Style="{StaticResource Caption}"/></DockPanel>
+                        <TextBlock Text="Search folder paths" Style="{StaticResource Caption}" Margin="0,0,0,4"/><TextBox x:Name="folderSearch" Text="{Binding FolderSearch, UpdateSourceTrigger=PropertyChanged}" TextChanged="FolderSearch_Changed" ToolTip="Search either folder's full path" AutomationProperties.Name="Search folder paths"/>
+                        <Grid Margin="0,8"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="8"/><ColumnDefinition/></Grid.ColumnDefinitions>
+                            <ComboBox x:Name="relationshipFilter" ItemsSource="{Binding RelationshipOptions}" SelectedItem="{Binding RelationshipFilter}" SelectionChanged="WorkspaceFilter_Changed" AutomationProperties.Name="Relationship filter"/>
+                            <ComboBox x:Name="reviewFilter" Grid.Column="2" ItemsSource="{Binding ReviewFilterOptions}" SelectedItem="{Binding ReviewFilter}" SelectionChanged="WorkspaceFilter_Changed" AutomationProperties.Name="Review filter"/>
+                        </Grid>
+                        <Expander Header="Size and similarity filters" Margin="0,0,0,8">
+                            <StackPanel Margin="0,8"><WrapPanel>
+                                <TextBlock Text="Min. larger folder (MB)" VerticalAlignment="Center"/><TextBox x:Name="txtMinSize" Width="65" Text="0" Margin="5,0,0,0"/>
+                                <TextBlock Text="Min. similarity %" VerticalAlignment="Center" Margin="5,0,0,0"/><TextBox x:Name="txtMinSimilarity" Width="50" Text="0" Margin="5,0,0,0"/>
+                            </WrapPanel><Button x:Name="btnApplyFilters" Content="Apply" Click="ApplyFilters_Click" HorizontalAlignment="Left" Margin="0,6,0,0"/>
+                            <TextBlock x:Name="filterError" Foreground="#A12828" TextWrapping="Wrap"/>
+                            <TextBlock Text="Similarity counts shared files against their union. Low similarity can still mean one folder contains all of the other." Style="{StaticResource Caption}" Margin="0,6,0,0"/>
+                            </StackPanel>
+                        </Expander>
+                        <WrapPanel Margin="0,0,0,8"><Button Content="Reset filters" Click="ResetFilters_Click"/><Button x:Name="btnClearSort" Content="Default order" Click="ClearSort_Click" ToolTip="Clear sorting"/></WrapPanel>
+                        <TextBlock Text="{Binding FocusSummary}" Style="{StaticResource Caption}" Margin="0,0,0,8"/>
+                    </StackPanel>
+                    <Grid Grid.Row="1">
+                        <ListView x:Name="listViewFolderMatches" SelectionChanged="listViewFolderMatches_SelectionChanged" ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                            <ListView.View><GridView>
+                                <GridViewColumn Header="Folder pair" Width="420"><GridViewColumn.CellTemplate><DataTemplate>
+                                    <StackPanel Margin="0,7" Width="400">
+                                        <TextBlock Text="{Binding LeftName, StringFormat=A · {0}}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" ToolTip="{Binding LeftFolder}"/>
+                                        <TextBlock Text="{Binding RightName, StringFormat=B · {0}}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" ToolTip="{Binding RightFolder}"/>
+                                        <TextBlock Text="{Binding LeftContext}" Style="{StaticResource Caption}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" ToolTip="{Binding LeftFolder}"/>
+                                        <TextBlock Text="{Binding RightContext}" Style="{StaticResource Caption}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" ToolTip="{Binding RightFolder}"/>
+                                        <TextBlock Text="{Binding Relationship}" Foreground="#245EA8" FontWeight="SemiBold" Margin="0,4,0,0"/>
+                                        <TextBlock Text="{Binding EvidenceSummary}" Style="{StaticResource Caption}"/>
+                                        <TextBlock Text="{Binding ReviewSummary}" Style="{StaticResource Caption}"/>
+                                    </StackPanel>
+                                </DataTemplate></GridViewColumn.CellTemplate></GridViewColumn>
+                                <GridViewColumn Header="Overlap %" DisplayMemberBinding="{Binding SimilarityPercentage, StringFormat=F1}" Width="65"/>
+                                <GridViewColumn Header="Size" DisplayMemberBinding="{Binding SizeDisplay}" Width="70"/>
+                            </GridView></ListView.View>
+                            <ListView.Resources><Style TargetType="GridViewColumnHeader"><Setter Property="ToolTip" Value="Click to sort; Ctrl+click adds a sort column. Size is the larger folder."/><EventSetter Event="Click" Handler="GridViewColumnHeader_Click"/></Style></ListView.Resources>
+                        </ListView>
+                        <TextBlock Text="{Binding EmptyResultsMessage}" TextWrapping="Wrap" Margin="16,45,16,0" VerticalAlignment="Top" Foreground="#526174" IsHitTestVisible="False">
+                            <TextBlock.Style><Style TargetType="TextBlock"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding FilteredFolderMatches.Count}" Value="0"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></TextBlock.Style>
+                        </TextBlock>
                     </Grid>
-                    
-                    <!-- Compact Options with file sort controls -->
-                    <WrapPanel Grid.Row="1" Orientation="Horizontal" Margin="3,4,3,4" VerticalAlignment="Center">
-                        <ctrl:CheckBox x:Name="chkShowUniqueFiles" Content="Show unique files" Margin="0,0,15,0" VerticalAlignment="Center" FontSize="11"
-                                      Checked="ShowUniqueFiles_Changed" Unchecked="ShowUniqueFiles_Changed"/>
-                        <ctrl:TextBlock Text="Files:" VerticalAlignment="Center" Margin="0,0,3,0" FontWeight="Bold" FontSize="11"/>
-                        <ctrl:TextBlock x:Name="lblFileCount" Text="0" VerticalAlignment="Center" FontSize="11" Margin="0,0,15,0"/>
-                        
-                        <!-- File sorting controls -->
-                        <ctrl:TextBlock Text="Sort:" VerticalAlignment="Center" Margin="0,0,3,0" FontWeight="Bold" FontSize="11"/>
-                        <ctrl:TextBlock Text="Ctrl+Click for multi-sort" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="10" Foreground="Gray"/>
-                        <ctrl:Button x:Name="btnClearFileSort" Content="Clear Sort" Width="70" Height="20" Click="ClearFileSort_Click" FontSize="10"
-                                    ToolTip="Clear file sorting and return to default order"/>
-                    </WrapPanel>
-                    
-                    <!-- Enhanced Files ListView - Maximum space utilization -->
-                    <ctrl:ListView x:Name="listViewFiles" Grid.Row="2" Margin="3" FontSize="10"
-                                    VirtualizingPanel.IsVirtualizing="True"
-                                    VirtualizingPanel.VirtualizationMode="Recycling"
-                                    ScrollViewer.CanContentScroll="True">
-                        <ctrl:ListView.View>
-                            <ctrl:GridView>
-                                <!-- Left Folder Columns -->
-                                <ctrl:GridViewColumn Header="← File Name" DisplayMemberBinding="{Binding LeftFileName}" Width="200"/>
-                                <ctrl:GridViewColumn Header="← Size" DisplayMemberBinding="{Binding LeftSizeDisplay}" Width="70"/>
-                                
-                                <!-- Right Folder Columns -->
-                                <ctrl:GridViewColumn Header="→ File Name" DisplayMemberBinding="{Binding RightFileName}" Width="200"/>
-                                <ctrl:GridViewColumn Header="→ Size" DisplayMemberBinding="{Binding RightSizeDisplay}" Width="70"/>
-                            </ctrl:GridView>
-                        </ctrl:ListView.View>
-                        <ctrl:ListView.Resources>
-                            <Style TargetType="{x:Type GridViewColumnHeader}">
-                                <Setter Property="ToolTip" Value="Click to sort, Ctrl+Click for multi-column sorting"/>
-                                <EventSetter Event="Click" Handler="FileListGridViewColumnHeader_Click"/>
-                                <Setter Property="FontSize" Value="11"/>
-                                <Setter Property="FontWeight" Value="Bold"/>
-                            </Style>
-                        </ctrl:ListView.Resources>
-                        <ctrl:ListView.ItemContainerStyle>
-                            <Style TargetType="ListViewItem">
-                                <Setter Property="ToolTip" Value="{Binding TooltipText}"/>
-                                <Setter Property="Padding" Value="2,1"/>
-                                <Style.Triggers>
-                                    <!-- Style for files that exist only in left folder -->
-                                    <MultiDataTrigger>
-                                        <MultiDataTrigger.Conditions>
-                                            <Condition Binding="{Binding HasLeftFile}" Value="True"/>
-                                            <Condition Binding="{Binding HasRightFile}" Value="False"/>
-                                        </MultiDataTrigger.Conditions>
-                                        <Setter Property="Background" Value="#E6F3FF"/>
-                                    </MultiDataTrigger>
-                                    
-                                    <!-- Style for files that exist only in right folder -->
-                                    <MultiDataTrigger>
-                                        <MultiDataTrigger.Conditions>
-                                            <Condition Binding="{Binding HasLeftFile}" Value="False"/>
-                                            <Condition Binding="{Binding HasRightFile}" Value="True"/>
-                                        </MultiDataTrigger.Conditions>
-                                        <Setter Property="Background" Value="#FFE6F3"/>
-                                    </MultiDataTrigger>
-                                    
-                                    <!-- Style for duplicate files (exist in both folders) -->
-                                    <DataTrigger Binding="{Binding IsDuplicate}" Value="True">
-                                        <Setter Property="Background" Value="#E6FFE6"/>
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </ctrl:ListView.ItemContainerStyle>
-                    </ctrl:ListView>
+                    <TextBlock Grid.Row="2" Text="Relationships describe recorded direct files. Check analysis completeness above." Style="{StaticResource Caption}" Margin="0,8,0,0"/>
                 </Grid>
-            </ctrl:GroupBox>
+            </Border>
+            <GridSplitter Grid.Column="1" Width="6" HorizontalAlignment="Center" Background="Transparent" DragCompleted="Pane_DragCompleted"/>
+            <!-- Evidence, differences and durable review context stay together. -->
+            <Border Grid.Column="2" Background="White" BorderBrush="#DCE3EB" BorderThickness="1" Padding="14">
+                <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                    <StackPanel>
+                        <DockPanel Margin="0,0,0,6">
+                            <TextBlock Text="Comparison evidence" FontSize="16" FontWeight="SemiBold"/>
+                            <TextBlock Text="{Binding SelectedFolderMatch.Relationship}" FontWeight="SemiBold" Foreground="#245EA8" HorizontalAlignment="Right"/>
+                        </DockPanel>
+                        <TextBlock Text="Direct files only · Subfolders are compared separately." Style="{StaticResource Caption}" Margin="0,0,0,4"/>
+                        <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="24"/><ColumnDefinition/></Grid.ColumnDefinitions><Grid.RowDefinitions><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
+                            <TextBlock Text="A" FontWeight="Bold" VerticalAlignment="Center"/><TextBox x:Name="txtLeftFolderDisplay" Grid.Column="1" IsReadOnly="True" BorderThickness="0" Background="#F3F5F8" Text="{Binding LeftFolderDisplay, Mode=OneWay}" ToolTip="{Binding LeftFolderDisplay}"/>
+                            <TextBlock Grid.Row="1" Text="B" FontWeight="Bold" VerticalAlignment="Center"/><TextBox x:Name="txtRightFolderDisplay" Grid.Row="1" Grid.Column="1" IsReadOnly="True" BorderThickness="0" Background="#F3F5F8" Margin="0,4,0,0" Text="{Binding RightFolderDisplay, Mode=OneWay}" ToolTip="{Binding RightFolderDisplay}"/>
+                        </Grid>
+                        <TextBlock Text="{Binding ComparisonSummary}" TextWrapping="Wrap" Margin="0,4"/>
+                        <WrapPanel IsEnabled="{Binding HasSelection}" Margin="0,4,0,0">
+                            <Button x:Name="btnOpenFolderA" Content="Open folder A" Tag="A" Click="OpenFolder_Click"/>
+                            <Button x:Name="btnOpenFolderB" Content="Open folder B" Tag="B" Click="OpenFolder_Click"/>
+                            <Button Content="Copy paths" Click="CopyPaths_Click"/>
+                        </WrapPanel>
+                        <Border BorderBrush="#E6D6D6" BorderThickness="0,1,0,0" Margin="0,10,0,4" Padding="0,8,0,0">
+                            <WrapPanel x:Name="folderActions" IsEnabled="{Binding CanManageFolders}">
+                                <Button x:Name="btnMergeA" Content="Merge to A…" Tag="MergeToA" Click="FolderAction_Click" Style="{StaticResource DangerButton}"/>
+                                <Button x:Name="btnMergeB" Content="Merge to B…" Tag="MergeToB" Click="FolderAction_Click" Style="{StaticResource DangerButton}"/>
+                                <StackPanel Orientation="Horizontal" Margin="18,0,0,0">
+                                    <Button x:Name="btnDeleteA" Content="Delete A…" Tag="DeleteA" Click="FolderAction_Click" Style="{StaticResource DangerButton}"/>
+                                    <Button x:Name="btnDeleteB" Content="Delete B…" Tag="DeleteB" Click="FolderAction_Click" Style="{StaticResource DangerButton}"/>
+                                </StackPanel>
+                            </WrapPanel>
+                        </Border>
+                        <TextBlock Text="Leaf folders only. Resolve subfolders and file conflicts first." Style="{StaticResource Caption}" Margin="0,0,0,4"/>
+                    </StackPanel>
+                    <StackPanel Grid.Row="1">
+                        <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="160"/><ColumnDefinition Width="8"/><ColumnDefinition/></Grid.ColumnDefinitions>
+                            <ComboBox x:Name="fileView" ItemsSource="{Binding FileViews}" SelectedItem="{Binding FileView}" AutomationProperties.Name="File status filter"/>
+                            <Grid Grid.Column="2"><TextBox x:Name="fileSearchBox" Text="{Binding FileSearch, UpdateSourceTrigger=PropertyChanged}" ToolTip="Search file names" AutomationProperties.Name="Search file names"/>
+                                <TextBlock Text="Search file names" Margin="8,0" VerticalAlignment="Center" Foreground="#526174" IsHitTestVisible="False"><TextBlock.Style><Style TargetType="TextBlock"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding Text, ElementName=fileSearchBox}" Value=""><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></TextBlock.Style></TextBlock>
+                            </Grid>
+                        </Grid>
+                        <WrapPanel x:Name="fileActions" IsEnabled="{Binding CanManageFolders}" Margin="0,5,0,0" ToolTip="Actions apply only to the selected file row">
+                            <WrapPanel.Resources><Style TargetType="Button"><Setter Property="Padding" Value="8,4"/><Setter Property="Margin" Value="0,0,5,0"/><Setter Property="MinHeight" Value="26"/></Style></WrapPanel.Resources>
+                            <Button x:Name="btnOpenFileA" Content="Open file A" Tag="OpenA" Click="FileAction_Click" IsEnabled="False"/>
+                            <Button x:Name="btnOpenFileB" Content="Open file B" Tag="OpenB" Click="FileAction_Click" IsEnabled="False"/>
+                            <Border BorderBrush="#E6D6D6" BorderThickness="1,0,0,0" Margin="16,0,0,0" Padding="12,0,0,0">
+                                <StackPanel Orientation="Horizontal">
+                                    <Button x:Name="btnDeleteFileA" Content="Delete A…" ToolTip="Permanently delete the selected file on A" Tag="DeleteA" Click="FileAction_Click" IsEnabled="False" Style="{StaticResource DangerButton}" Padding="8,4" MinHeight="26"/>
+                                    <Button x:Name="btnDeleteFileB" Content="Delete B…" ToolTip="Permanently delete the selected file on B" Tag="DeleteB" Click="FileAction_Click" IsEnabled="False" Style="{StaticResource DangerButton}" Padding="8,4" MinHeight="26"/>
+                                </StackPanel>
+                            </Border>
+                        </WrapPanel>
+                        <DockPanel Margin="0,4"><Button x:Name="btnClearFileSort" DockPanel.Dock="Right" Content="Default order" Click="ClearFileSort_Click" MinHeight="24" Padding="7,2"/><TextBlock x:Name="lblFileCount" Text="{Binding FileCountDisplay}" Style="{StaticResource Caption}" VerticalAlignment="Center"/></DockPanel>
+                    </StackPanel>
+                    <Grid Grid.Row="2"><ListView x:Name="listViewFiles" SelectionChanged="FileSelection_Changed">
+                        <ListView.View><GridView>
+                            <GridViewColumn Header="File" DisplayMemberBinding="{Binding PrimaryFileName}" Width="150"/>
+                            <GridViewColumn Header="Status" DisplayMemberBinding="{Binding Status}" Width="130"/>
+                            <GridViewColumn Header="A size" DisplayMemberBinding="{Binding LeftSizeDisplay}" Width="70"/>
+                            <GridViewColumn Header="B size" DisplayMemberBinding="{Binding RightSizeDisplay}" Width="70"/>
+                            <GridViewColumn Header="A modified" DisplayMemberBinding="{Binding LeftDateDisplay}" Width="135"/>
+                            <GridViewColumn Header="B modified" DisplayMemberBinding="{Binding RightDateDisplay}" Width="135"/>
+                        </GridView></ListView.View>
+                        <ListView.Resources><Style TargetType="GridViewColumnHeader"><Setter Property="ToolTip" Value="Click to sort; Ctrl+click adds a sort column"/><EventSetter Event="Click" Handler="FileListGridViewColumnHeader_Click"/></Style></ListView.Resources>
+                        <ListView.ItemContainerStyle><Style TargetType="ListViewItem"><Setter Property="ToolTip" Value="{Binding TooltipText}"/><Setter Property="Padding" Value="3,6"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Status}" Value="Only A"><Setter Property="Background" Value="#EAF2FC"/></DataTrigger>
+                                <DataTrigger Binding="{Binding Status}" Value="Only B"><Setter Property="Background" Value="#F1EDFA"/></DataTrigger>
+                                <DataTrigger Binding="{Binding Status}" Value="Different contents"><Setter Property="Background" Value="#FFF1DC"/></DataTrigger>
+                                <DataTrigger Binding="{Binding Status}" Value="Unverified"><Setter Property="Background" Value="#FDECEA"/></DataTrigger>
+                                <DataTrigger Binding="{Binding Status}" Value="Identical"><Setter Property="Background" Value="#EBF5EE"/></DataTrigger>
+                            </Style.Triggers>
+                        </Style></ListView.ItemContainerStyle>
+                    </ListView>
+                    <TextBlock Text="{Binding EmptyFilesMessage}" TextWrapping="Wrap" Margin="12,42,12,0" VerticalAlignment="Top" Foreground="#526174" IsHitTestVisible="False">
+                        <TextBlock.Style><Style TargetType="TextBlock"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding FileDetails.Count}" Value="0"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></TextBlock.Style>
+                    </TextBlock></Grid>
+                    <Border Grid.Row="3" BorderBrush="#DCE3EB" BorderThickness="0,1,0,0" Padding="0,10,0,0" IsEnabled="{Binding CanReview}">
+                        <Expander x:Name="reviewExpander" Header="Review and notes"><StackPanel Margin="0,8,0,0">
+                            <DockPanel><CheckBox DockPanel.Dock="Right" Content="Bookmark" IsChecked="{Binding IsBookmarked}" VerticalAlignment="Center"/><ComboBox Width="145" HorizontalAlignment="Left" ItemsSource="{Binding ReviewOptions}" SelectedItem="{Binding ReviewStatus}" AutomationProperties.Name="Review status"/></DockPanel>
+                            <TextBlock Text="{Binding ReviewNotice}" Style="{StaticResource Caption}" Margin="0,6"/>
+                            <TextBox Text="{Binding ReviewNotes, UpdateSourceTrigger=PropertyChanged}" AcceptsReturn="True" Height="64" VerticalScrollBarVisibility="Auto" TextWrapping="Wrap" ToolTip="What did you learn about these folders?" AutomationProperties.Name="Review notes"/>
+                        </StackPanel></Expander>
+                    </Border>
+                </Grid>
+            </Border>
         </Grid>
+        <Border Grid.Row="3" Background="White" BorderBrush="#DCE3EB" BorderThickness="0,1,0,0" Padding="16,8">
+            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="180"/><ColumnDefinition Width="12"/><ColumnDefinition/></Grid.ColumnDefinitions>
+                <ProgressBar x:Name="mainProgressBar" Height="8" VerticalAlignment="Center"/>
+                <StackPanel Grid.Column="2"><TextBlock x:Name="statusLabel" Text="Add locations or open a saved project." TextWrapping="Wrap"/><TextBlock Text="{Binding OverviewSummary}" Style="{StaticResource Caption}"/></StackPanel>
+            </Grid>
+        </Border>
     </Grid>
+    <!-- Prior layout annotations retained with the UI redesign. -->
+<!-- Top panel: Compact -->
+    <!-- Bottom panel: Results + Files -->
+    <!-- TOP PANEL - Optimized for space -->
+    <!-- Folders list (increased from 250px) -->
+    <!-- Buttons and status (constrained from *) -->
+    <!-- Left: Folders List (responsive height) -->
+    <!-- Right: Compact Buttons and Status -->
+    <!-- Buttons -->
+    <!-- Status -->
+    <!-- Compact button layout -->
+    <!-- Compact status bar -->
+    <!-- FCF Spinner -->
+    <!-- Progress bar -->
+    <!-- Status text -->
+    <!-- BOTTOM PANEL: Optimized Results and Files -->
+    <!-- Results panel (reduced) -->
+    <!-- Splitter -->
+    <!-- Files panel (increased significantly) -->
+    <!-- Results Panel - Compact -->
+    <!-- Compact filters -->
+    <!-- Results list -->
+    <!-- Compact filters -->
+    <!-- Folder sorting guidance -->
+    <!-- Compact Results List -->
+    <!-- Splitter -->
+    <!-- Files Panel - Maximized Space -->
+    <!-- Compact folder paths -->
+    <!-- Options -->
+    <!-- Files list - maximum space -->
+    <!-- Compact Folder Paths -->
+    <!-- Compact Options with file sort controls -->
+    <!-- File sorting controls -->
+    <!-- Enhanced Files ListView - Maximum space utilization -->
+    <!-- Left Folder Columns -->
+    <!-- Right Folder Columns -->
+    <!-- Style for files that exist only in left folder -->
+    <!-- Style for files that exist only in right folder -->
+    <!-- Style for duplicate files (exist in both folders) -->
 </Window>

@@ -15,6 +15,7 @@ namespace ClutterFlock.Core
         [JsonRequired] public FilterCriteria Filters { get; set; } = new();
         [JsonRequired] public bool ShowUniqueFiles { get; set; }
         [JsonRequired] public int MatchCount { get; set; }
+        public WorkspaceState? Workspace { get; set; }
         public string? SelectedLeftFolder { get; set; }
         public string? SelectedRightFolder { get; set; }
     }
@@ -34,6 +35,8 @@ namespace ClutterFlock.Core
         public long? Size { get; set; }
         public DateTime? LastWriteTime { get; set; }
         public string? Hash { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? ContentSample { get; set; }
     }
 
     // Track field presence while deserializing older JSON files directly from the
@@ -41,6 +44,7 @@ namespace ClutterFlock.Core
     internal sealed class LegacyProjectSnapshot
     {
         [JsonIgnore] public ProjectData Data { get; } = new();
+        public WorkspaceState? Workspace { get => Data.Workspace; set => Data.Workspace = value; }
         [JsonIgnore] public HashSet<string> Present { get; } = new(StringComparer.OrdinalIgnoreCase);
         [JsonRequired] public List<string> ScanFolders
         {

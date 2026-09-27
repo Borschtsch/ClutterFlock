@@ -17,7 +17,9 @@ public sealed class WindowWorkflowTests
         File.WriteAllText(Path.Combine(root, "left", "same.txt"), "same");
         File.WriteAllText(Path.Combine(root, "right", "same.txt"), "same");
         var project = Path.Combine(root, "project.cfp");
-        var window = new MainWindow();
+        var window = new MainWindow { ShowInTaskbar = false, Left = -10000, Top = -10000 };
+        window.Show();
+        window.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
         try
         {
             using (var original = new MainViewModel { MinimumSizeMB = 0, MinimumSimilarity = 75, ShowUniqueFiles = true })
@@ -31,7 +33,7 @@ public sealed class WindowWorkflowTests
             Assert.IsTrue(await model.LoadProjectAsync(project), model.StatusMessage);
             Assert.AreEqual("75", ((TextBox)window.FindName("txtMinSimilarity")).Text);
             Assert.AreEqual("0", ((TextBox)window.FindName("txtMinSize")).Text);
-            Assert.AreEqual(true, ((CheckBox)window.FindName("chkShowUniqueFiles")).IsChecked);
+            Assert.AreEqual("All", ((ComboBox)window.FindName("fileView")).SelectedItem);
             var results = (ListView)window.FindName("listViewFolderMatches");
             Assert.HasCount(1, results.Items);
             Assert.AreSame(model.SelectedFolderMatch, results.SelectedItem);
@@ -64,11 +66,13 @@ public sealed class WindowWorkflowTests
             ((Button)window.FindName("btnClearFileSort")).RaiseEvent(new System.Windows.RoutedEventArgs(Button.ClickEvent));
             var roots = (ListBox)window.FindName("listBoxFolders");
             roots.SelectedIndex = 0;
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while (model.IsPopulatingResults && DateTime.UtcNow < deadline) await Task.Delay(10);
             Assert.IsTrue(((Button)window.FindName("btnRemoveFolder")).IsEnabled);
         }
         finally
         {
-            window.Close();
+            window.Hide(); window.Close();
             Assert.StartsWith(Path.GetFullPath(Path.Combine(Path.GetTempPath(), "ClutterFlockWindow")) + Path.DirectorySeparatorChar, Path.GetFullPath(root));
             Directory.Delete(root, recursive: true);
         }

@@ -144,12 +144,15 @@ public sealed class ProjectWorkflowTests
         Assert.HasCount(2, model.ScanFolders);
         Assert.IsTrue(await model.SaveProjectAsync(_project), model.StatusMessage);
         var data = await new ProjectManager().LoadProjectAsync(_project);
-        Assert.HasCount(2, data.FolderInfoCache);
+        Assert.HasCount(3, data.FolderInfoCache);
+        Assert.IsTrue(model.RootsChanged);
+        Assert.HasCount(2, data.Workspace!.Locations);
         model.RemoveFolder(_left);
         Assert.IsTrue(await model.SaveProjectAsync(_project));
         data = await new ProjectManager().LoadProjectAsync(_project);
-        CollectionAssert.AreEqual(new[] { _right }, data.FolderInfoCache.Keys.ToArray());
-        Assert.IsTrue(data.FileMetadataCache.Keys.All(p => p.StartsWith(_right + Path.DirectorySeparatorChar)));
+        Assert.HasCount(3, data.FolderInfoCache);
+        CollectionAssert.AreEqual(new[] { _right }, data.Workspace!.Locations.Select(l => l.Path).ToArray());
+        Assert.HasCount(1, data.DuplicateFiles);
         Assert.IsTrue(await model.RunComparisonAsync());
         Assert.IsEmpty(model.FilteredFolderMatches);
     }
@@ -193,7 +196,7 @@ public sealed class ProjectWorkflowTests
         await restored.ApplyFiltersAsync();
         Assert.HasCount(1, restored.FilteredFolderMatches);
         await restored.SelectFolderMatchAsync(restored.FilteredFolderMatches[0]);
-        Assert.AreEqual("N/A", restored.FileDetails[0].LeftSizeDisplay);
+        Assert.AreEqual("N/A", restored.FileDetails.Single(f => f.IsDuplicate).LeftSizeDisplay);
         Assert.IsTrue(await restored.SaveProjectAsync(_project));
         var upgraded = await new ProjectManager().LoadProjectAsync(_project);
         Assert.AreEqual("3.0", upgraded.Version);
@@ -273,18 +276,18 @@ public sealed class ProjectWorkflowTests
     }
 
     [TestMethod]
-    public async Task CancelAddAndLoad_DoNotPartiallyReplaceRoots()
+    public async Task PrepareLocationAndCancelLoad_RetainsPreparedRootsAndPreviousAnalysis()
     {
         using var model = await AnalyzeAsync();
         Assert.IsTrue(await model.SaveProjectAsync(_project));
         var adding = model.AddFolderAsync(_directory);
         model.CancelOperation();
-        Assert.IsFalse(await adding);
-        Assert.HasCount(2, model.ScanFolders);
+        Assert.IsTrue(await adding);
+        Assert.HasCount(3, model.ScanFolders);
         var loading = model.LoadProjectAsync(_project);
         model.CancelOperation();
         Assert.IsFalse(await loading);
-        Assert.HasCount(2, model.ScanFolders);
+        Assert.HasCount(3, model.ScanFolders);
         Assert.HasCount(1, model.FilteredFolderMatches);
         Assert.IsTrue(await model.LoadProjectAsync(_project));
     }

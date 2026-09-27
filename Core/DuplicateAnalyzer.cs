@@ -14,11 +14,17 @@ namespace ClutterFlock.Core
     /// <summary>
     /// Core duplicate analysis engine
     /// </summary>
-    public class DuplicateAnalyzer : IDuplicateAnalyzer
+    public partial class DuplicateAnalyzer : IDuplicateAnalyzer
     {
         private readonly ICacheManager _cacheManager;
         private readonly IErrorRecoveryService _errorRecoveryService;
-        private static readonly int MaxParallelism = Math.Max(1, Environment.ProcessorCount - 1);
+        // CPU count is not a useful disk queue depth. Bound reads independently of hashing workers.
+        // The former fixed limit was four. The read budget is now supplied by AnalysisOptions.
+        private sealed class FileGroupComparer : IEqualityComparer<(string Name, long Size)>
+        {
+            public bool Equals((string Name, long Size) a, (string Name, long Size) b) => a.Size == b.Size && StringComparer.OrdinalIgnoreCase.Equals(a.Name, b.Name);
+            public int GetHashCode((string Name, long Size) value) => HashCode.Combine(StringComparer.OrdinalIgnoreCase.GetHashCode(value.Name), value.Size);
+        }
 
         public DuplicateAnalyzer(ICacheManager cacheManager, IErrorRecoveryService errorRecoveryService)
         {
@@ -26,8 +32,10 @@ namespace ClutterFlock.Core
             _errorRecoveryService = errorRecoveryService ?? throw new ArgumentNullException(nameof(errorRecoveryService));
         }
 
-        public async Task<List<FileMatch>> FindDuplicateFilesAsync(List<string> folders, IProgress<AnalysisProgress>? progress, CancellationToken cancellationToken)
+        public async Task<List<FileMatch>> FindDuplicateFilesAsync(List<string> folders, IProgress<AnalysisProgress>? progress, CancellationToken cancellationToken, Func<IReadOnlyList<FileMatch>, CancellationToken, Task>? matchesFound = null, AnalysisOptions? options = null)
         {
+            options ??= new AnalysisOptions();
+            if (options.MaxConcurrentReads < 0) throw new ArgumentOutOfRangeException(nameof(options.MaxConcurrentReads));
             // Phase 1: Organize cached file data for comparison
             progress?.Report(new AnalysisProgress
             {
@@ -73,12 +81,12 @@ namespace ClutterFlock.Core
                 MaxProgress = potentialDuplicateGroups.Count
             });
 
-            var duplicateMatches = await CompareFileHashesAsync(potentialDuplicateGroups, progress, cancellationToken);
+            var duplicateMatches = await CompareFileHashesAsync(potentialDuplicateGroups, progress, cancellationToken, matchesFound, options);
 
             progress?.Report(new AnalysisProgress
             {
                 Phase = AnalysisPhase.Complete,
-                StatusMessage = $"Found {duplicateMatches.Count:N0} duplicate files",
+                StatusMessage = $"Found {options.Statistics.FilePairsEmitted:N0} verified file pairs",
                 CurrentProgress = duplicateMatches.Count,
                 MaxProgress = duplicateMatches.Count
             });
@@ -88,8 +96,9 @@ namespace ClutterFlock.Core
 
         private async Task<Dictionary<(string, long), List<string>>> BuildFileIndexAsync(List<string> folders, IProgress<AnalysisProgress>? progress, CancellationToken cancellationToken)
         {
-            var fileIndex = new Dictionary<(string, long), List<string>>();
+            var fileIndex = new Dictionary<(string, long), List<string>>(new FileGroupComparer());
             int processedFolders = 0;
+            var indexClock = System.Diagnostics.Stopwatch.StartNew();
 
             // Process cached folder data (no actual file system scanning)
             foreach (var folder in folders)
@@ -107,13 +116,12 @@ namespace ClutterFlock.Core
                         var metadata = _cacheManager.GetFileMetadata(file);
                         if (metadata == null) continue;
                         
-                        var key = (metadata.FileName.ToLowerInvariant(), metadata.Size);
+                        var key = (metadata.FileName, metadata.Size);
                         
                         if (!fileIndex.TryGetValue(key, out var list))
                             fileIndex[key] = list = new List<string>();
                         
-                        if (!list.Contains(folder))
-                            list.Add(folder);
+                        list.Add(file);
                     }
                     catch (Exception ex)
                     {
@@ -124,8 +132,9 @@ namespace ClutterFlock.Core
                     }
 
                     // Yield control every 100 files to keep UI responsive
+                    // The former interval is now 4096: indexing runs off the dispatcher.
                     processedFiles++;
-                    if (processedFiles % 100 == 0)
+                    if (processedFiles % 4096 == 0)
                     {
                         await Task.Yield();
                         cancellationToken.ThrowIfCancellationRequested();
@@ -133,8 +142,9 @@ namespace ClutterFlock.Core
                 }
 
                 var current = ++processedFolders;
-                if (current % 10 == 0 || current == folders.Count)
+                if (indexClock.ElapsedMilliseconds >= 250 || current == folders.Count)
                 {
+                    indexClock.Restart();
                     progress?.Report(new AnalysisProgress
                     {
                         Phase = AnalysisPhase.BuildingFileIndex,
@@ -151,139 +161,47 @@ namespace ClutterFlock.Core
             return fileIndex;
         }
 
-        private async Task<Dictionary<string, List<string>>> GroupPotentialDuplicatesAsync(Dictionary<(string, long), List<string>> fileIndex, IProgress<AnalysisProgress>? progress, CancellationToken cancellationToken)
+        private Task<Dictionary<string, List<string>>> GroupPotentialDuplicatesAsync(Dictionary<(string, long), List<string>> fileIndex, IProgress<AnalysisProgress>? progress, CancellationToken cancellationToken)
         {
-            var fileGroups = new Dictionary<string, List<string>>();
-            var processedGroups = 0;
-            var totalGroups = fileIndex.Where(x => x.Value.Count > 1).Count();
-            var processedFiles = 0;
-            
-            progress?.Report(new AnalysisProgress
-            {
-                Phase = AnalysisPhase.BuildingFileIndex,
-                StatusMessage = $"Starting to group {totalGroups} potential duplicate groups...",
-                CurrentProgress = 0,
-                MaxProgress = totalGroups
-            });
-            
+            // The direct path index replaces repeated walks through every matching folder.
+            // Preserve the original grouping/worker annotations below for context.
             // Process each filename/size group that has multiple folders
-            foreach (var kvp in fileIndex.Where(x => x.Value.Count > 1))
+                // Get all actual file paths for this filename/size combination
+                        // Update progress more frequently - every 50 files OR every 10th group
+                            // Allow UI updates more frequently
+                // Always report progress after each group
+                // Always yield after each group to keep UI responsive
+            // Return only groups with multiple files (potential duplicates)
+                            // Skip files in the same folder.
+            cancellationToken.ThrowIfCancellationRequested();
+            var groups = new Dictionary<string, List<string>>();
+            foreach (var entry in fileIndex.Where(e => e.Value.Count > 1).OrderBy(e => e.Key.Item2))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                
-                var (fileName, fileSize) = kvp.Key;
-                var foldersWithThisFile = kvp.Value;
-                
-                // Get all actual file paths for this filename/size combination
-                foreach (var folder in foldersWithThisFile)
-                {
-                    var folderFiles = _cacheManager.GetFolderFiles(folder);
-                    foreach (var file in folderFiles)
-                    {
-                        var metadata = _cacheManager.GetFileMetadata(file);
-                        if (metadata != null && 
-                            metadata.FileName.Equals(fileName, StringComparison.OrdinalIgnoreCase) && 
-                            metadata.Size == fileSize)
-                        {
-                            var key = CreateFileKey(file);
-                            if (!fileGroups.TryGetValue(key, out var list))
-                                fileGroups[key] = list = new List<string>();
-                            list.Add(file);
-                        }
-                        
-                        // Update progress more frequently - every 50 files OR every 10th group
-                        processedFiles++;
-                        if (processedFiles % 50 == 0)
-                        {
-                            progress?.Report(new AnalysisProgress
-                            {
-                                Phase = AnalysisPhase.BuildingFileIndex,
-                                StatusMessage = $"Grouping duplicates: {processedGroups + 1}/{totalGroups} groups ({processedFiles} files processed)...",
-                                CurrentProgress = processedGroups,
-                                MaxProgress = totalGroups
-                            });
-                            
-                            // Allow UI updates more frequently
-                            await Task.Yield();
-                            cancellationToken.ThrowIfCancellationRequested();
-                        }
-                    }
-                }
-
-                var current = ++processedGroups;
-                
-                // Always report progress after each group
-                progress?.Report(new AnalysisProgress
-                {
-                    Phase = AnalysisPhase.BuildingFileIndex,
-                    StatusMessage = $"Grouping potential duplicates: {current}/{totalGroups} groups...",
-                    CurrentProgress = current,
-                    MaxProgress = totalGroups
-                });
-
-                // Always yield after each group to keep UI responsive
-                await Task.Yield();
+                groups.Add($"{entry.Key.Item1}_{entry.Key.Item2}", entry.Value);
             }
-
-            // Return only groups with multiple files (potential duplicates)
-            var result = fileGroups.Where(g => g.Value.Count > 1).ToDictionary(g => g.Key, g => g.Value);
-            
             progress?.Report(new AnalysisProgress
             {
-                Phase = AnalysisPhase.BuildingFileIndex,
-                StatusMessage = $"Found {result.Count} potential duplicate groups",
-                CurrentProgress = totalGroups,
-                MaxProgress = totalGroups
+                Phase = AnalysisPhase.BuildingFileIndex, StatusMessage = $"Indexed {groups.Count:N0} candidate groups; smaller files first.",
+                CurrentProgress = groups.Count, MaxProgress = groups.Count
             });
-
-            return result;
+            return Task.FromResult(groups);
         }
 
-        private async Task<List<FileMatch>> CompareFileHashesAsync(Dictionary<string, List<string>> duplicateGroups, IProgress<AnalysisProgress>? progress, CancellationToken cancellationToken)
+        // Empty matches remain evidence, but cannot qualify a folder pair on their own.
+        internal static bool HasNonEmptyContent(FileMatch match, ICacheManager cache)
         {
-            var matches = new ConcurrentBag<FileMatch>();
-            int processedGroups = 0;
+            return HasContent(match.PathA) && HasContent(match.PathB);
 
-            await Parallel.ForEachAsync(duplicateGroups.Values, new ParallelOptions
+            bool HasContent(string path)
             {
-                MaxDegreeOfParallelism = MaxParallelism,
-                CancellationToken = cancellationToken
-            }, async (files, token) =>
-            {
-                var hashGroups = new Dictionary<string, List<string>>();
-                foreach (var file in files.Distinct(StringComparer.OrdinalIgnoreCase))
-                {
-                    token.ThrowIfCancellationRequested();
-                    var hash = _cacheManager.GetFileHash(file);
-                    if (hash == null)
-                    {
-                        hash = await ComputeFileHashAsync(file, token);
-                        if (hash.Length > 0) _cacheManager.CacheFileHash(file, hash);
-                    }
-                    if (hash.Length == 0) continue;
-                    if (!hashGroups.TryGetValue(hash, out var group)) hashGroups[hash] = group = new();
-                    group.Add(file);
-                }
-                foreach (var group in hashGroups.Values)
-                    for (var i = 0; i < group.Count; i++)
-                        for (var j = i + 1; j < group.Count; j++)
-                        {
-                            token.ThrowIfCancellationRequested();
-                            // Skip files in the same folder.
-                            if (!string.Equals(Path.GetDirectoryName(group[i]), Path.GetDirectoryName(group[j]), StringComparison.OrdinalIgnoreCase))
-                                matches.Add(new FileMatch(group[i], group[j]));
-                        }
-                var current = Interlocked.Increment(ref processedGroups);
-                progress?.Report(new AnalysisProgress
-                {
-                    Phase = AnalysisPhase.ComparingFiles,
-                    StatusMessage = $"Comparing file groups: {current}/{duplicateGroups.Count}",
-                    CurrentProgress = current,
-                    MaxProgress = duplicateGroups.Count
-                });
-            });
-
-            return matches.ToList();
+                var metadata = cache.GetFileMetadata(path);
+                if (metadata != null) return metadata.Size > 0;
+                // Legacy offline snapshots may have full hashes without file metadata.
+                var hash = cache.GetFileHash(path);
+                return hash is { Length: 64 } && hash.All(Uri.IsHexDigit)
+                    && !hash.Equals("E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855", StringComparison.OrdinalIgnoreCase);
+            }
         }
 
         public async Task<List<FolderMatch>> AggregateFolderMatchesAsync(List<FileMatch> fileMatches, ICacheManager cacheManager, IProgress<AnalysisProgress>? progress = null, CancellationToken cancellationToken = default)
@@ -303,6 +221,7 @@ namespace ClutterFlock.Core
                 .DistinctBy(m => (m.PathA.ToUpperInvariant(), m.PathB.ToUpperInvariant()))
                 .GroupBy(m => (Path.GetDirectoryName(m.PathA) ?? string.Empty, Path.GetDirectoryName(m.PathB) ?? string.Empty))
                 .Where(g => !string.IsNullOrEmpty(g.Key.Item1) && !string.IsNullOrEmpty(g.Key.Item2))
+                .Where(g => g.Any(match => HasNonEmptyContent(match, cacheManager)))
                 .ToList();
 
             progress?.Report(new AnalysisProgress
@@ -386,7 +305,7 @@ namespace ClutterFlock.Core
 
         public Task<string> ComputeFileHashAsync(string filePath) => ComputeFileHashAsync(filePath, CancellationToken.None);
 
-        private async Task<string> ComputeFileHashAsync(string filePath, CancellationToken token)
+        private async Task<string> ComputeFileHashAsync(string filePath, CancellationToken token, Action<int>? bytesRead = null, StorageWorkContext? work = null)
         {
             for (var attempt = 0; ; attempt++)
             {
@@ -398,8 +317,24 @@ namespace ClutterFlock.Core
                     var length = before.Length;
                     var modified = before.LastWriteTimeUtc;
                     await using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read,
-                        FileShare.Read, 65536, FileOptions.Asynchronous | FileOptions.SequentialScan);
-                    var hash = Convert.ToHexString(await SHA256.HashDataAsync(stream, token));
+                        FileShare.Read, 1, FileOptions.Asynchronous | FileOptions.SequentialScan);
+                    var buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(1024 * 1024);
+                    string hash;
+                    try
+                    {
+                        using var digest = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+                        int count;
+                        while ((count = await stream.ReadAsync(buffer.AsMemory(0, 1024 * 1024), token)) > 0)
+                        {
+                            if (work == null) digest.AppendData(buffer, 0, count);
+                            else await work.RunCpuAsync(() => digest.AppendData(buffer, 0, count), token).ConfigureAwait(false);
+                            bytesRead?.Invoke(count);
+                        }
+                        hash = "";
+                        if (work == null) hash = Convert.ToHexString(digest.GetHashAndReset());
+                        else await work.RunCpuAsync(() => hash = Convert.ToHexString(digest.GetHashAndReset()), token).ConfigureAwait(false);
+                    }
+                    finally { System.Buffers.ArrayPool<byte>.Shared.Return(buffer); }
                     before.Refresh();
                     if (before.Length != length || before.LastWriteTimeUtc != modified)
                         throw new IOException("File changed while being read.");

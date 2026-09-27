@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel;
 using System.Collections.Generic;
 using System.IO;
 
@@ -12,7 +13,7 @@ namespace ClutterFlock.Models
     /// <summary>
     /// Represents a pair of folders with their duplicate files and similarity metrics
     /// </summary>
-    public sealed class FolderMatch
+    public sealed class FolderMatch : INotifyPropertyChanged
     {
         public string LeftFolder { get; }
         public string RightFolder { get; }
@@ -21,10 +22,26 @@ namespace ClutterFlock.Models
         /// Jaccard similarity percentage between the two folders (0-100%)
         /// Calculated as: (duplicate files count / union of all files) * 100
         /// </summary>
-        public double SimilarityPercentage { get; }
+        public double SimilarityPercentage { get; private set; }
         public long FolderSizeBytes { get; }
         public string FolderName => Path.GetFileName(LeftFolder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
         public string SizeDisplay => FormatSize(FolderSizeBytes);
+        public int LeftFileCount { get; }
+        public int RightFileCount { get; }
+        public string LeftName => Path.GetFileName(LeftFolder.TrimEnd('\\', '/')) is { Length: > 0 } name ? name : LeftFolder;
+        public string RightName => Path.GetFileName(RightFolder.TrimEnd('\\', '/')) is { Length: > 0 } name ? name : RightFolder;
+        public double LeftCoverage => LeftFileCount == 0 ? 0 : 100.0 * DuplicateFiles.Count / LeftFileCount;
+        public double RightCoverage => RightFileCount == 0 ? 0 : 100.0 * DuplicateFiles.Count / RightFileCount;
+        public bool IsProvisional { get; set; }
+        public string Relationship => IsProvisional ? "Verification in progress" : DuplicateFiles.Count == LeftFileCount && DuplicateFiles.Count == RightFileCount
+            ? "Identical files" : DuplicateFiles.Count == LeftFileCount ? "B contains all of A"
+            : DuplicateFiles.Count == RightFileCount ? "A contains all of B" : "Partial overlap";
+        public string EvidenceSummary => $"{DuplicateFiles.Count:N0} verified matches · A {LeftCoverage:F0}% / B {RightCoverage:F0}%";
+        private string _reviewSummary = "Unreviewed", _leftContext = "", _rightContext = "";
+        public string ReviewSummary { get => _reviewSummary; set { _reviewSummary = value; PropertyChanged?.Invoke(this, new(nameof(ReviewSummary))); } }
+        public string LeftContext { get => _leftContext; set { _leftContext = value; PropertyChanged?.Invoke(this, new(nameof(LeftContext))); } }
+        public string RightContext { get => _rightContext; set { _rightContext = value; PropertyChanged?.Invoke(this, new(nameof(RightContext))); } }
+        public event PropertyChangedEventHandler? PropertyChanged;
         public DateTime? LatestModificationDate { get; set; }
 
         /// <summary>
@@ -43,6 +60,8 @@ namespace ClutterFlock.Models
             RightFolder = rightFolder;
             DuplicateFiles = duplicateFiles;
             FolderSizeBytes = folderSizeBytes;
+            LeftFileCount = totalLeftFiles;
+            RightFileCount = totalRightFiles;
             
             // Calculate Jaccard similarity: |A ∩ B| / |A ∪ B|
             // This represents the ratio of shared files to total unique files across both folders
@@ -51,6 +70,14 @@ namespace ClutterFlock.Models
             SimilarityPercentage = unionSize > 0 
                 ? (duplicateFiles.Count / (double)unionSize * 100.0) 
                 : 0.0;
+        }
+
+        public void RefreshEvidence()
+        {
+            var union = LeftFileCount + RightFileCount - DuplicateFiles.Count;
+            SimilarityPercentage = union > 0 ? DuplicateFiles.Count / (double)union * 100 : 0;
+            foreach (var name in new[] { nameof(SimilarityPercentage), nameof(Relationship), nameof(EvidenceSummary), nameof(LeftCoverage), nameof(RightCoverage) })
+                PropertyChanged?.Invoke(this, new(name));
         }
 
         private static string FormatSize(long size)
@@ -82,6 +109,7 @@ namespace ClutterFlock.Models
         public string RightFullPath { get; set; } = string.Empty;
         
         public bool IsDuplicate { get; set; }
+        public string Status { get; set; } = "Unverified";
         public bool HasLeftFile => !string.IsNullOrEmpty(LeftFileName);
         public bool HasRightFile => !string.IsNullOrEmpty(RightFileName);
         public string PrimaryFileName => HasLeftFile ? LeftFileName : RightFileName;
@@ -108,6 +136,7 @@ namespace ClutterFlock.Models
         public string FileName { get; set; } = string.Empty;
         public long Size { get; set; }
         public DateTime LastWriteTime { get; set; }
+        public string? ContentSample { get; set; }
     }
 
     /// <summary>
@@ -136,6 +165,7 @@ namespace ClutterFlock.Models
         public Dictionary<string, FileMetadata> FileMetadataCache { get; set; } = new();
         public List<FileMatch> DuplicateFiles { get; set; } = new();
         public bool HasAnalysis { get; set; }
+        public WorkspaceState? Workspace { get; set; }
         public FilterCriteria Filters { get; set; } = new();
         public bool ShowUniqueFiles { get; set; }
         public string? SelectedLeftFolder { get; set; }

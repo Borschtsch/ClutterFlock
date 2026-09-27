@@ -1,15 +1,15 @@
-param([switch]$NoBuild)
+param([switch]$NoBuild, [string]$Configuration = 'Release')
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Push-Location $repoRoot
 try {
     if (-not $NoBuild) {
-        dotnet build ClutterFlock.sln -c Release
+        dotnet build ClutterFlock.Tests/ClutterFlock.Tests.csproj -c $Configuration
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     }
     $results = Join-Path $repoRoot 'ClutterFlock.Tests/TestResults'
     $runResults = Join-Path $results ([Guid]::NewGuid().ToString('N'))
-    dotnet test --project ClutterFlock.Tests/ClutterFlock.Tests.csproj -c Release --no-build --coverlet --coverlet-output-format cobertura --coverlet-include '[ClutterFlock]*' --results-directory $runResults --report-trx --timeout 2m
+    dotnet test --project ClutterFlock.Tests/ClutterFlock.Tests.csproj -c $Configuration --no-build --coverlet --coverlet-output-format cobertura --coverlet-include '[ClutterFlock]*' --results-directory $runResults --report-trx --timeout 2m
     $testExit = $LASTEXITCODE
     $reports = @(Get-ChildItem -LiteralPath $runResults -Filter 'coverage.cobertura*.xml')
     if ($reports.Count -ne 1) { throw 'Expected one coverage report from this integration run.' }

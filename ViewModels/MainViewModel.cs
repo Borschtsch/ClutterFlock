@@ -18,7 +18,7 @@ namespace ClutterFlock.ViewModels
     /// <summary>
     /// Main ViewModel for the application, implementing MVVM pattern
     /// </summary>
-    public class MainViewModel : INotifyPropertyChanged, IDisposable
+    public partial class MainViewModel : INotifyPropertyChanged, IDisposable
     {
         #region Private Fields
         private ICacheManager _cacheManager;
@@ -40,7 +40,7 @@ namespace ClutterFlock.ViewModels
         private CancellationTokenSource? _cancellationTokenSource;
         private bool _operationInProgress;
         private bool _isPopulatingResults;
-        private bool _showUniqueFiles;
+        private bool _showUniqueFiles = true;
         
         private string _statusMessage = "Ready to scan";
         private int _currentProgress;
@@ -52,13 +52,13 @@ namespace ClutterFlock.ViewModels
         private string _rightFolderDisplay = string.Empty;
         private string _fileCountDisplay = "0";
         
-        private double _minimumSimilarity = 50.0;
-        private double _minimumSizeMB = 1.0;
+        private double _minimumSimilarity;
+        private double _minimumSizeMB;
         #endregion
 
         #region Public Properties
         public ObservableCollection<string> ScanFolders { get; } = new();
-        public ObservableCollection<FolderMatch> FilteredFolderMatches { get; } = new();
+        public ResultCollection<FolderMatch> FilteredFolderMatches { get; } = new();
         public ObservableCollection<FileDetailInfo> FileDetails { get; } = new();
 
         public string StatusMessage
@@ -98,6 +98,7 @@ namespace ClutterFlock.ViewModels
                 OnPropertyChanged(nameof(CanLoadProject));
                 OnPropertyChanged(nameof(CanApplyFilters));
                 OnPropertyChanged(nameof(CanCancel));
+                OnPropertyChanged(nameof(CanManageFolders));
             }
         }
 
@@ -127,6 +128,9 @@ namespace ClutterFlock.ViewModels
             set
             {
                 SetProperty(ref _showUniqueFiles, value);
+                if (!value) _fileView = "Identical";
+                else if (_fileView == "Identical") _fileView = "All";
+                OnPropertyChanged(nameof(FileView));
                 FilterFileDetails();
             }
         }
@@ -165,9 +169,9 @@ namespace ClutterFlock.ViewModels
         public bool CanAddFolders => !OperationInProgress && !IsPopulatingResults && !_disposed;
         public bool CanRemoveFolders => !OperationInProgress && !IsPopulatingResults && !_disposed && ScanFolders.Count > 0;
         public bool CanRunComparison => !OperationInProgress && !IsPopulatingResults && !_disposed && ScanFolders.Count > 0;
-        public bool CanSaveProject => !OperationInProgress && !IsPopulatingResults && !_disposed && ScanFolders.Count > 0;
+        public bool CanSaveProject => !OperationInProgress && !IsPopulatingResults && !_disposed && (ScanFolders.Count > 0 || _hasAnalysis);
         public bool CanLoadProject => !OperationInProgress && !IsPopulatingResults && !_disposed;
-        public bool CanApplyFilters => !OperationInProgress && !IsPopulatingResults && !_disposed && _hasAnalysis;
+        public bool CanApplyFilters => (!OperationInProgress || IsAnalyzing) && !IsPopulatingResults && !_disposed && _hasAnalysis;
         public bool CanCancel => OperationInProgress && _cancellationTokenSource != null;
         #endregion
 
@@ -180,6 +184,7 @@ namespace ClutterFlock.ViewModels
             _duplicateAnalyzer = new DuplicateAnalyzer(_cacheManager, _errorRecoveryService);
             _projectManager = new ProjectManager();
             _fileComparer = new FileComparer();
+            PropertyChanged += TrackWorkspaceChange;
         }
         #endregion
 
@@ -193,23 +198,20 @@ namespace ClutterFlock.ViewModels
                 if (_scanFolders.Contains(folderPath, StringComparer.OrdinalIgnoreCase)) return false;
                 // Immediately show that operation started.
                 // Keep long scans cancellable without the former fixed 30-minute timeout.
-                var token = BeginOperation("Scanning folder...");
-                var progress = CreateProgress();
-                var staged = new CacheManager();
-                staged.LoadFromProjectData(_cacheManager.ExportToProjectData(_scanFolders));
-                var scanner = new FolderScanner(staged, _errorRecoveryService);
-                var folders = await Task.Run(() => scanner.ScanFolderHierarchyAsync(folderPath, progress, token), token);
-                token.ThrowIfCancellationRequested();
-                SetCache(staged);
+                // Adding a location now prepares the next scan; scanning runs only on Compare.
+                if (!Directory.Exists(folderPath)) throw new DirectoryNotFoundException("Location is unavailable.");
                 _scanFolders.Add(folderPath);
                 ScanFolders.Add(folderPath);
-                ClearAnalysis();
-                StatusMessage = $"Added root with {folders.Count} folders" + ErrorMessage();
+                Locations.Add(new LocationInfo { Path = folderPath, Label = DefaultLabel(folderPath) });
+                MarkDirty();
+                NotifyWorkspace();
+                NotifyAvailability();
+                StatusMessage = "Location added. Compare when all locations are ready.";
+                await Task.CompletedTask;
                 return true;
             }
             catch (OperationCanceledException) { StatusMessage = "Folder scan cancelled"; return false; }
             catch (Exception ex) { StatusMessage = $"Error adding folder: {ex.Message}"; return false; }
-            finally { EndOperation(); }
         }
 
         public void RemoveFolder(string folderPath)
@@ -222,8 +224,11 @@ namespace ClutterFlock.ViewModels
             ScanFolders.Remove(existing);
             // A child root remains valid when its parent is removed, and siblings
             // such as Photos and Photos-old must never be confused.
-            _cacheManager.RetainFolders(_scanFolders);
-            ClearAnalysis();
+            // Preserve the analyzed snapshot until a new comparison completes.
+            var location = Locations.FirstOrDefault(l => l.Path.Equals(existing, StringComparison.OrdinalIgnoreCase));
+            if (location != null) Locations.Remove(location);
+            MarkDirty();
+            NotifyWorkspace();
             NotifyAvailability();
             StatusMessage = $"Removed root: {folderPath}";
         }
@@ -231,54 +236,97 @@ namespace ClutterFlock.ViewModels
         public async Task<bool> RunComparisonAsync()
         {
             if (!CanRunComparison) return false;
+            var previousCache = _cacheManager;
+            var previousMatches = _allFolderMatches;
+            var previousHasAnalysis = _hasAnalysis;
+            var previousSelection = SelectedFolderMatch;
+            var previousRoots = _analysisRoots;
+            var previousDirty = IsDirty;
+            var previewStarted = false;
             try
             {
                 // Show immediate progress feedback.
-                var token = BeginOperation("Refreshing folders and comparing files...");
-                _ = CurrentFilters(); // Reject invalid filters before replacing any analysis state.
-                var roots = _scanFolders.ToList();
-                var progress = CreateProgress();
                 // Run the heavy work on a background thread to avoid UI blocking.
-                var result = await Task.Run(async () =>
-                {
                     // Keep the previous snapshot intact until a complete fresh
                     // analysis is available. Never reuse saved hashes as live truth.
                     // Validate that each root still exists before refreshing the snapshot.
-                    var missing = roots.Where(root => !Directory.Exists(root)).ToList();
-                    if (missing.Count > 0)
-                        throw new IOException($"Reconnect the unavailable roots before comparing: {string.Join(", ", missing)}");
-                    var cache = new CacheManager();
-                    var scanner = new FolderScanner(cache, _errorRecoveryService);
-                    foreach (var root in roots)
-                        await scanner.ScanFolderHierarchyAsync(root, progress, token);
-                    var analyzer = new DuplicateAnalyzer(cache, _errorRecoveryService);
                     // Get all cached folders from this fresh scan and find duplicate files.
-                    var files = await analyzer.FindDuplicateFilesAsync(cache.GetAllFolderInfo().Keys.ToList(), progress, token);
                     // Aggregate into folder matches.
-                    var matches = await analyzer.AggregateFolderMatchesAsync(files, cache, progress, token);
-                    token.ThrowIfCancellationRequested();
-                    return (cache, matches);
+                // Update results on UI thread.
+                // Apply filters and populate results.
+                var token = BeginOperation("Discovering folders and reading metadata...");
+                SetAnalysisState(analyzing: true, preview: false);
+                _ = CurrentFilters();
+                var roots = _scanFolders.ToList();
+                var progress = CreateProgress();
+                var discovery = await Task.Run(async () =>
+                {
+                    var missing = roots.Where(root => !Directory.Exists(root)).ToList();
+                    if (missing.Count > 0) throw new IOException($"Reconnect the unavailable roots before comparing: {string.Join(", ", missing)}");
+                    var fresh = new CacheManager();
+                    var scanner = new FolderScanner(fresh, _errorRecoveryService);
+                    var topology = StorageTopology.Discover(roots);
+                    await scanner.ScanFoldersAsync(roots, progress, token, topology);
+                    return (Cache: fresh, Topology: topology);
                 }, token);
                 token.ThrowIfCancellationRequested();
-                // Update results on UI thread.
-                SetCache(result.cache);
+                previewStarted = true;
+                var cache = discovery.Cache;
+                SetCache(cache);
+                _allFolderMatches = new();
+                _hasAnalysis = true;
                 SelectedFolderMatch = null;
                 ClearFileDetails();
-                _allFolderMatches = result.matches;
-                _hasAnalysis = true;
-                // Apply filters and populate results.
+                SetAnalysisState(analyzing: true, preview: true);
                 await ApplyFiltersCoreAsync();
+                await StreamVerifiedMatchesAsync(cache, progress, token, discovery.Topology);
+                token.ThrowIfCancellationRequested();
+                // Commit the completed preview. Cancellation restores the captured snapshot instead.
+                SetAnalysisState(analyzing: true, preview: false);
+                foreach (var match in _allFolderMatches) { match.IsProvisional = false; match.RefreshEvidence(); }
+                _allFolderMatches = _allFolderMatches.OrderByDescending(m => m.SimilarityPercentage).ToList();
+                _analysisRoots = roots;
+                _folderIndex = null;
+                await ApplyFiltersCoreAsync();
+                if (SelectedFolderMatch != null) await UpdateFileDetailsAsync();
+                _workspace.AnalyzedAt = DateTime.Now;
+                _workspace.CoverageKnown = true;
+                var errors = _errorRecoveryService.GetErrorSummary();
+                _workspace.AnalysisIssues = errors.ErrorMessages.ToList();
+                if (errors.HasErrors && _workspace.AnalysisIssues.Count == 0)
+                    _workspace.AnalysisIssues.Add($"{errors.SkippedFiles} items were skipped. Results may be incomplete.");
+                foreach (var review in _workspace.Reviews) review.NeedsReview = true;
+                UpdateReviewSummaries();
+                MarkDirty();
+                NotifySelection();
+                NotifyWorkspace();
                 StatusMessage = $"Analysis complete: {FilteredFolderMatches.Count} of {_allFolderMatches.Count} folder pairs shown" + ErrorMessage();
                 return true;
             }
-            catch (OperationCanceledException) { StatusMessage = "Comparison cancelled; previous results retained"; return false; }
-            catch (Exception ex) { StatusMessage = $"Comparison failed; previous results retained. {ex.Message}"; return false; }
-            finally { EndOperation(); }
+            catch (Exception ex)
+            {
+                if (previewStarted)
+                {
+                    ++_filterVersion; ++_detailVersion;
+                    SetCache(previousCache); _allFolderMatches = previousMatches;
+                    _hasAnalysis = previousHasAnalysis; _analysisRoots = previousRoots;
+                    SetAnalysisState(analyzing: true, preview: false);
+                    await ApplyFiltersCoreAsync();
+                    await SelectFolderMatchAsync(previousSelection != null && FilteredFolderMatches.Contains(previousSelection) ? previousSelection : null);
+                    IsDirty = previousDirty || _analysisWorkspaceChanged;
+                }
+                StatusMessage = ex is OperationCanceledException ? "Comparison cancelled; previous results retained"
+                    : $"Comparison failed; previous results retained. {ex.Message}";
+                return false;
+            }
+            finally { SetAnalysisState(analyzing: false, preview: false); EndOperation(); }
         }
 
         public async Task ApplyFiltersAsync()
         {
-            if (!CanApplyFilters) return;
+            // A newer search supersedes an in-flight filter through _filterVersion.
+            // Do not drop the final filter when several bound controls change together.
+            if (IsUpdatingFilterValues || OperationInProgress && !IsAnalyzing || !_hasAnalysis || _disposed) return;
             try { await ApplyFiltersCoreAsync(); }
             catch (Exception ex) { StatusMessage = $"Error applying filters: {ex.Message}"; }
         }
@@ -291,24 +339,37 @@ namespace ClutterFlock.ViewModels
             try
             {
                 var criteria = CurrentFilters();
-                var matches = _allFolderMatches;
+                var matches = _allFolderMatches.ToList();
                 // Run filtering on background thread.
-                var filtered = await Task.Run(() => _duplicateAnalyzer.ApplyFilters(matches, criteria));
+                var search = FolderSearch.Trim();
+                var focus = FocusFolder;
+                var location = LocationFilter;
+                var relationship = RelationshipFilter;
+                var review = ReviewFilter;
+                var filtered = await Task.Run(() => _duplicateAnalyzer.ApplyFilters(matches, criteria)
+                    .Where(m => MatchesWorkspace(m, search, focus, location, relationship, review)).ToList());
                 if (_disposed || version != _filterVersion) return;
-                // Clear existing results on UI thread.
-                FilteredFolderMatches.Clear();
-                // Add results in batches to keep UI responsive.
-                for (var i = 0; i < filtered.Count; i++)
-                {
-                    if (_disposed || version != _filterVersion) return;
-                    FilteredFolderMatches.Add(filtered[i]);
-                    // Allow UI to update by yielding to the captured UI context.
-                    if (i % 50 == 49) await Task.Yield();
-                }
-                if (SelectedFolderMatch != null && !filtered.Contains(SelectedFolderMatch))
-                    SelectedFolderMatch = null;
                 // Update status when result population completes.
-                StatusMessage = $"Filter applied: showing {filtered.Count} folder pairs";
+                await RebuildFolderCatalogAsync(version);
+                if (_disposed || version != _filterVersion) return;
+                if (IsLivePreview)
+                {
+                    _visibleLiveMatches.Clear();
+                    foreach (var match in filtered) _visibleLiveMatches.Add(match);
+                    foreach (var match in _allFolderMatches)
+                        if (PassesLiveFilters(match) && _visibleLiveMatches.Add(match)) filtered.Add(match);
+                }
+                // Clear existing results on UI thread.
+                // Add results in batches to keep UI responsive.
+                // Publish one complete batch: per-item notifications make sorted WPF views
+                // repeatedly shift their backing arrays, even with row virtualization enabled.
+                FilteredFolderMatches.ReplaceAll(filtered);
+                if (SelectedFolderMatch != null && !FilteredFolderMatches.Contains(SelectedFolderMatch))
+                    SelectedFolderMatch = null;
+                // Allow UI to update by yielding to the captured UI context.
+                // Background filtering above yields before this single collection replacement.
+                NotifyWorkspace();
+                if (!IsAnalyzing) StatusMessage = $"Filter applied: showing {filtered.Count} folder pairs";
             }
             finally
             {
@@ -329,7 +390,7 @@ namespace ClutterFlock.ViewModels
             try
             {
                 BeginOperation("Saving project...", cancellable: false);
-                var data = _cacheManager.ExportToProjectData(_scanFolders);
+                var data = _cacheManager.ExportToProjectData(_hasAnalysis ? _analysisRoots : _scanFolders);
                 data.CreatedDate = _createdDate;
                 data.DuplicateFiles = _allFolderMatches.SelectMany(m => m.DuplicateFiles).ToList();
                 data.HasAnalysis = _hasAnalysis;
@@ -337,8 +398,14 @@ namespace ClutterFlock.ViewModels
                 data.ShowUniqueFiles = ShowUniqueFiles;
                 data.SelectedLeftFolder = SelectedFolderMatch?.LeftFolder;
                 data.SelectedRightFolder = SelectedFolderMatch?.RightFolder;
+                var savedAt = DateTime.Now;
+                data.Workspace = CaptureWorkspace(savedAt);
                 await Task.Run(() => _projectManager.SaveProjectAsync(filePath, data));
-                StatusMessage = "Project saved successfully";
+                _workspace.SavedAt = savedAt;
+                ProjectPath = Path.GetFullPath(filePath);
+                IsDirty = false;
+                NotifyWorkspace();
+                StatusMessage = $"Saved {Path.GetFileName(filePath)} at {savedAt:t}";
                 return true;
             }
             catch (Exception ex) { StatusMessage = $"Error saving project: {ex.Message}"; return false; }
@@ -362,6 +429,7 @@ namespace ClutterFlock.ViewModels
                     return (data, cache, matches);
                 }, token);
                 token.ThrowIfCancellationRequested();
+                _restoringWorkspace = true;
                 // Only replace the active project after parsing and validation succeed.
                 SetCache(restored.cache);
                 // Clear existing results.
@@ -370,10 +438,16 @@ namespace ClutterFlock.ViewModels
                 ScanFolders.Clear();
                 // Retain saved roots even when their drives are unavailable;
                 // folder existence is validated when a fresh comparison is requested.
-                foreach (var root in restored.data.ScanFolders)
+                _analysisRoots = restored.data.ScanFolders.ToList();
+                _workspace = restored.data.Workspace ?? new WorkspaceState();
+                var preparedRoots = restored.data.Workspace?.Locations.Select(l => l.Path).ToList() ?? restored.data.ScanFolders;
+                Locations.Clear();
+                foreach (var root in preparedRoots)
                 {
                     _scanFolders.Add(root);
                     ScanFolders.Add(root);
+                    Locations.Add(new LocationInfo { Path = root,
+                        Label = _workspace.Locations.FirstOrDefault(l => l.Path.Equals(root, StringComparison.OrdinalIgnoreCase))?.Label ?? DefaultLabel(root) });
                 }
                 _createdDate = restored.data.CreatedDate;
                 _hasAnalysis = restored.data.HasAnalysis;
@@ -381,16 +455,21 @@ namespace ClutterFlock.ViewModels
                 MinimumSimilarity = restored.data.Filters.MinimumSimilarityPercent;
                 MinimumSizeMB = restored.data.Filters.MinimumSizeBytes / (1024.0 * 1024);
                 ShowUniqueFiles = restored.data.ShowUniqueFiles;
+                RestoreWorkspaceFilters(restored.data.Workspace);
+                UpdateReviewSummaries();
                 await ApplyFiltersCoreAsync();
                 await SelectFolderMatchAsync(FilteredFolderMatches.FirstOrDefault(m =>
                     string.Equals(m.LeftFolder, restored.data.SelectedLeftFolder, StringComparison.OrdinalIgnoreCase) &&
                     string.Equals(m.RightFolder, restored.data.SelectedRightFolder, StringComparison.OrdinalIgnoreCase)));
+                ProjectPath = Path.GetFullPath(filePath);
+                IsDirty = false;
+                NotifyWorkspace();
                 StatusMessage = $"Project restored: {ScanFolders.Count} roots, {FilteredFolderMatches.Count} folder pairs. Showing the saved snapshot; run comparison to refresh.";
                 return true;
             }
             catch (OperationCanceledException) { StatusMessage = "Project load cancelled; previous project retained"; return false; }
             catch (Exception ex) { StatusMessage = $"Error loading project; previous project retained. {ex.Message}"; return false; }
-            finally { EndOperation(); }
+            finally { _restoringWorkspace = false; EndOperation(); }
         }
 
         public Task SelectFolderMatchAsync(FolderMatch? match)
@@ -414,6 +493,7 @@ namespace ClutterFlock.ViewModels
         private void SetCache(ICacheManager cache)
         {
             _cacheManager = cache;
+            _folderIndex = null;
             _folderScanner = new FolderScanner(cache, _errorRecoveryService);
             _duplicateAnalyzer = new DuplicateAnalyzer(cache, _errorRecoveryService);
         }
@@ -472,6 +552,7 @@ namespace ClutterFlock.ViewModels
             OnPropertyChanged(nameof(CanLoadProject));
             OnPropertyChanged(nameof(CanApplyFilters));
             OnPropertyChanged(nameof(CanCancel));
+            OnPropertyChanged(nameof(CanManageFolders));
         }
         #endregion
 
@@ -515,15 +596,17 @@ namespace ClutterFlock.ViewModels
             {
                 // Use saved metadata so folder details remain available offline.
                 var cache = _cacheManager;
+                var verified = match.DuplicateFiles.ToList();
                 // Build file comparison on background thread.
                 var details = await Task.Run(() => _fileComparer.BuildFileComparison(
-                    match.LeftFolder, match.RightFolder, match.DuplicateFiles, cache));
+                    match.LeftFolder, match.RightFolder, verified, cache));
                 if (_disposed || version != _detailVersion) return;
                 // Update folder displays.
                 LeftFolderDisplay = match.LeftFolder;
                 RightFolderDisplay = match.RightFolder;
                 _allFileDetails = details;
                 FilterFileDetails();
+                NotifySelection();
             }
             catch (Exception ex)
             {
@@ -537,7 +620,9 @@ namespace ClutterFlock.ViewModels
         {
             FileDetails.Clear();
             
-            var filteredFiles = _fileComparer.FilterFileDetails(_allFileDetails, ShowUniqueFiles);
+            var filteredFiles = _fileComparer.FilterFileDetails(_allFileDetails, ShowUniqueFiles)
+                .Where(f => (FileView == "All" || FileView == "Differences" && f.Status != "Identical" || f.Status == FileView)
+                    && f.PrimaryFileName.Contains(FileSearch, StringComparison.OrdinalIgnoreCase)).ToList();
             foreach (var file in filteredFiles)
             {
                 FileDetails.Add(file);
@@ -546,9 +631,8 @@ namespace ClutterFlock.ViewModels
             var duplicateCount = _allFileDetails.Count(f => f.IsDuplicate);
             var uniqueCount = _allFileDetails.Count(f => !f.IsDuplicate);
 
-            FileCountDisplay = ShowUniqueFiles
-                ? $"{_allFileDetails.Count} total ({duplicateCount} duplicates, {uniqueCount} unique)"
-                : $"{duplicateCount} duplicates";
+            FileCountDisplay = $"{filteredFiles.Count:N0} of {_allFileDetails.Count:N0} file rows · {duplicateCount:N0} identical · {uniqueCount:N0} other";
+            OnPropertyChanged(nameof(ComparisonSummary));
         }
 
         private void ClearFileDetails()
@@ -558,6 +642,7 @@ namespace ClutterFlock.ViewModels
             FileCountDisplay = "0";
             _allFileDetails.Clear();
             FileDetails.Clear();
+            NotifySelection();
         }
         #endregion
 

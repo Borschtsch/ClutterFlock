@@ -20,6 +20,8 @@ namespace ClutterFlock.Core
             // Get all files from both folders
             var leftFiles = cacheManager.GetFolderFiles(leftFolder);
             var rightFiles = cacheManager.GetFolderFiles(rightFolder);
+            var leftByName = leftFiles.ToDictionary(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase);
+            var rightByName = rightFiles.ToDictionary(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase);
             
             // Create lookup for duplicate files by filename
             var duplicateFileMap = new Dictionary<string, FileMatch>(StringComparer.OrdinalIgnoreCase);
@@ -39,10 +41,8 @@ namespace ClutterFlock.Core
             // Build file details for each unique file name
             foreach (var fileName in allFileNames.OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
             {
-                var leftFile = leftFiles.FirstOrDefault(f => 
-                    Path.GetFileName(f).Equals(fileName, StringComparison.OrdinalIgnoreCase));
-                var rightFile = rightFiles.FirstOrDefault(f => 
-                    Path.GetFileName(f).Equals(fileName, StringComparison.OrdinalIgnoreCase));
+                leftByName.TryGetValue(fileName, out var leftFile);
+                rightByName.TryGetValue(fileName, out var rightFile);
                 
                 var isDuplicate = duplicateFileMap.ContainsKey(fileName);
                 
@@ -63,6 +63,17 @@ namespace ClutterFlock.Core
                     PopulateFileInfo(rightFile, fileDetail, cacheManager, isLeft: false);
                 }
                 
+                // A missing hash is unknown evidence, not proof of different contents.
+                var leftMetadata = leftFile == null ? null : cacheManager.GetFileMetadata(leftFile);
+                var rightMetadata = rightFile == null ? null : cacheManager.GetFileMetadata(rightFile);
+                var leftHash = leftFile == null ? null : cacheManager.GetFileHash(leftFile);
+                var rightHash = rightFile == null ? null : cacheManager.GetFileHash(rightFile);
+                fileDetail.Status = isDuplicate ? "Identical" : leftFile == null ? "Only B" : rightFile == null ? "Only A"
+                    : (leftMetadata != null && rightMetadata != null && leftMetadata.Size != rightMetadata.Size)
+                        || (leftHash != null && rightHash != null && !leftHash.Equals(rightHash, StringComparison.OrdinalIgnoreCase))
+                        || (leftMetadata?.ContentSample is { } leftSample && rightMetadata?.ContentSample is { } rightSample
+                            && !leftSample.Equals(rightSample, StringComparison.OrdinalIgnoreCase))
+                        ? "Different contents" : "Unverified";
                 fileDetails.Add(fileDetail);
             }
             

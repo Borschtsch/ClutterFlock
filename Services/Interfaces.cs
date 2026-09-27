@@ -12,6 +12,7 @@ namespace ClutterFlock.Services
     public interface IFolderScanner
     {
         Task<List<string>> ScanFolderHierarchyAsync(string rootPath, IProgress<AnalysisProgress>? progress, CancellationToken cancellationToken);
+        Task<List<string>> ScanFoldersAsync(IReadOnlyList<string> roots, IProgress<AnalysisProgress>? progress, CancellationToken cancellationToken, ClutterFlock.Core.StorageTopology? topology = null);
         Task<FolderInfo> AnalyzeFolderAsync(string folderPath, CancellationToken cancellationToken);
         int CountSubfolders(string rootPath);
     }
@@ -28,6 +29,7 @@ namespace ClutterFlock.Services
         string? GetFileHash(string filePath);
         void ClearCache();
         void RemoveFolderFromCache(string folderPath);
+        void RemoveFileFromCache(string filePath);
         void RetainFolders(IReadOnlyCollection<string> roots);
         Dictionary<string, FolderInfo> GetAllFolderInfo();
         Dictionary<string, string> GetAllFileHashes();
@@ -47,7 +49,7 @@ namespace ClutterFlock.Services
     /// </summary>
     public interface IDuplicateAnalyzer
     {
-        Task<List<FileMatch>> FindDuplicateFilesAsync(List<string> folders, IProgress<AnalysisProgress>? progress, CancellationToken cancellationToken);
+        Task<List<FileMatch>> FindDuplicateFilesAsync(List<string> folders, IProgress<AnalysisProgress>? progress, CancellationToken cancellationToken, Func<IReadOnlyList<FileMatch>, CancellationToken, Task>? matchesFound = null, AnalysisOptions? options = null);
         List<FolderMatch> AggregateFolderMatches(List<FileMatch> fileMatches, ICacheManager cacheManager);
         Task<List<FolderMatch>> AggregateFolderMatchesAsync(List<FileMatch> fileMatches, ICacheManager cacheManager, IProgress<AnalysisProgress>? progress = null, CancellationToken cancellationToken = default);
         List<FolderMatch> ApplyFilters(List<FolderMatch> matches, FilterCriteria criteria);

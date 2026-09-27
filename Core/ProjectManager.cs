@@ -49,7 +49,8 @@ namespace ClutterFlock.Core
                             ShowUniqueFiles = projectData.ShowUniqueFiles,
                             SelectedLeftFolder = projectData.SelectedLeftFolder,
                             SelectedRightFolder = projectData.SelectedRightFolder,
-                            MatchCount = projectData.DuplicateFiles.Count
+                            MatchCount = projectData.DuplicateFiles.Count,
+                            Workspace = projectData.Workspace
                         };
                         await using (var entry = archive.CreateEntry("project.json", CompressionLevel.Optimal).Open())
                             await JsonSerializer.SerializeAsync(entry, header, JsonOptions);
@@ -176,7 +177,7 @@ namespace ClutterFlock.Core
                         Name = Path.GetFileName(file),
                         Size = metadata?.Size,
                         LastWriteTime = metadata?.LastWriteTime,
-                        Hash = hash
+                        Hash = hash, ContentSample = metadata?.ContentSample
                     });
                 }
                 yield return folder;
@@ -198,6 +199,7 @@ namespace ClutterFlock.Core
                 throw new InvalidDataException("Unsupported project format or match count.");
             var data = new ProjectData
             {
+                Workspace = header.Workspace,
                 ApplicationName = header.ApplicationName,
                 Version = header.Version,
                 ScanFolders = header.ScanFolders,
@@ -216,6 +218,7 @@ namespace ClutterFlock.Core
             // Root indices refer to the header's original order, before normalization/deduplication.
             var roots = header.ScanFolders;
             var files = new List<string>();
+            var repeatedFolders = false;
             await using (var input = Entry("folders.json").Open())
             {
                 await foreach (var folder in JsonSerializer.DeserializeAsyncEnumerable<StoredFolder>(input, JsonOptions, token))
@@ -227,10 +230,24 @@ namespace ClutterFlock.Core
                     var path = PathUtilities.Normalize(Path.Combine(roots[folder.Root], folder.Path));
                     if (!PathUtilities.IsWithin(path, roots[folder.Root]))
                         throw new InvalidDataException("Stored folder escapes its root.");
-                    var info = new FolderInfo { TotalSize = folder.TotalSize, LatestModificationDate = folder.LatestModificationDate };
-                    if (!data.FolderInfoCache.TryAdd(path, info))
-                        throw new InvalidDataException("Duplicate stored folder.");
-                    data.FolderFileCache.Add(path, info.Files);
+                    var repeated = data.FolderInfoCache.TryGetValue(path, out var info);
+                    Dictionary<string, string>? originalFiles = null;
+                    if (repeated)
+                    {
+                        // Older saves can record one directory through overlapping roots or path aliases.
+                        // Only identical snapshots can be coalesced; never choose between conflicting evidence.
+                        repeatedFolders = true;
+                        if (info!.TotalSize != folder.TotalSize || info.LatestModificationDate != folder.LatestModificationDate ||
+                            info.Files.Count != folder.Files.Count)
+                            throw new InvalidDataException($"Conflicting stored folder records: {path}");
+                        originalFiles = info.Files.ToDictionary(f => Path.GetFileName(f), StringComparer.OrdinalIgnoreCase);
+                    }
+                    else
+                    {
+                        info = new FolderInfo { TotalSize = folder.TotalSize, LatestModificationDate = folder.LatestModificationDate };
+                        data.FolderInfoCache.Add(path, info);
+                        data.FolderFileCache.Add(path, info.Files);
+                    }
                     var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                     foreach (var file in folder.Files)
                     {
@@ -240,12 +257,27 @@ namespace ClutterFlock.Core
                             file.Size.HasValue != file.LastWriteTime.HasValue)
                             throw new InvalidDataException("Invalid stored filename or metadata.");
                         var filePath = Path.Combine(path, file.Name);
-                        info.Files.Add(filePath);
+                        if (repeated)
+                        {
+                            if (!originalFiles!.TryGetValue(file.Name, out var original))
+                                throw new InvalidDataException($"Conflicting stored file lists: {path}");
+                            data.FileMetadataCache.TryGetValue(original, out var metadata);
+                            data.FileHashCache.TryGetValue(original, out var hash);
+                            if (metadata?.Size != file.Size || metadata?.LastWriteTime != file.LastWriteTime ||
+                                !string.Equals(metadata?.ContentSample, file.ContentSample, StringComparison.OrdinalIgnoreCase) ||
+                                !string.Equals(hash, file.Hash, StringComparison.OrdinalIgnoreCase))
+                                throw new InvalidDataException($"Conflicting stored file evidence: {original}");
+                            // Every stored occurrence still occupies an ID in matches.bin. Skipping it
+                            // would shift later references and associate evidence with the wrong files.
+                            files.Add(original);
+                            continue;
+                        }
+                        info!.Files.Add(filePath);
                         files.Add(filePath);
                         if (file.Size.HasValue)
                             data.FileMetadataCache.Add(filePath, new FileMetadata
                             {
-                                FileName = file.Name, Size = file.Size.Value, LastWriteTime = file.LastWriteTime!.Value
+                                FileName = file.Name, Size = file.Size.Value, LastWriteTime = file.LastWriteTime!.Value, ContentSample = file.ContentSample
                             });
                         if (file.Hash != null) data.FileHashCache.Add(filePath, file.Hash);
                     }
@@ -274,11 +306,11 @@ namespace ClutterFlock.Core
                 }
                 if (input.ReadByte() != -1) throw new InvalidDataException("Unexpected saved match data.");
             }
-            Validate(data);
+            Validate(data, coalesceRepeatedMatches: repeatedFolders);
             return data;
         }
 
-        private static Dictionary<string, int> Validate(ProjectData data)
+        private static Dictionary<string, int> Validate(ProjectData data, bool coalesceRepeatedMatches = false)
         {
             if (data.ApplicationName != "ClutterFlock" ||
                 !Version.TryParse(data.Version, out var version) || version.Major is < 1 or > 3)
@@ -292,12 +324,23 @@ namespace ClutterFlock.Core
             static bool ValidPath(string? path) => !string.IsNullOrWhiteSpace(path) && Path.IsPathFullyQualified(path);
             if (data.ScanFolders.Any(p => !ValidPath(p)))
                 throw new InvalidDataException("Project roots must be absolute paths.");
+            if (data.Workspace is { } workspace)
+            {
+                if (workspace.Locations == null || workspace.Reviews == null || workspace.AnalysisIssues == null ||
+                    workspace.Locations.Any(l => l == null || !ValidPath(l.Path) || l.Label == null) ||
+                    workspace.Reviews.Any(r => r == null || !ValidPath(r.LeftFolder) || !ValidPath(r.RightFolder) ||
+                        r.Notes == null || r.Status is not ("Unreviewed" or "Reviewed" or "Investigate" or "Ignore")) ||
+                    workspace.AnalysisIssues.Any(i => i == null) ||
+                    !double.IsFinite(workspace.LocationsWidth) || !double.IsFinite(workspace.ComparisonsWidth))
+                    throw new InvalidDataException("Invalid saved workspace.");
+            }
             data.ScanFolders = data.ScanFolders.Select(PathUtilities.Normalize).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             bool InRoots(string path) => ValidPath(path) && data.ScanFolders.Any(root => PathUtilities.IsWithin(path, root));
             bool InFolder(string file, string folder) => ValidPath(file) &&
                 string.Equals(Path.GetDirectoryName(PathUtilities.Normalize(file)), PathUtilities.Normalize(folder), StringComparison.OrdinalIgnoreCase);
+            var normalizedFolders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var entry in data.FolderInfoCache)
-                if (!InRoots(entry.Key) || entry.Value == null || entry.Value.Files == null || entry.Value.TotalSize < 0 ||
+                if (!InRoots(entry.Key) || !normalizedFolders.Add(PathUtilities.Normalize(entry.Key)) || entry.Value == null || entry.Value.Files == null || entry.Value.TotalSize < 0 ||
                     entry.Value.Files.Any(f => !InFolder(f, entry.Key)) ||
                     entry.Value.Files.Distinct(StringComparer.OrdinalIgnoreCase).Count() != entry.Value.Files.Count)
                     throw new InvalidDataException("Invalid folder cache in project.");
@@ -306,7 +349,8 @@ namespace ClutterFlock.Core
                     throw new InvalidDataException("Invalid file list in project.");
             foreach (var entry in data.FileMetadataCache)
                 if (!InRoots(entry.Key) || entry.Value == null || entry.Value.Size < 0 ||
-                    !Path.GetFileName(entry.Key).Equals(entry.Value.FileName, StringComparison.OrdinalIgnoreCase))
+                    !Path.GetFileName(entry.Key).Equals(entry.Value.FileName, StringComparison.OrdinalIgnoreCase) ||
+                    entry.Value.ContentSample is { } sample && (sample.Length != 67 || !sample.StartsWith("v1:", StringComparison.Ordinal) || !sample[3..].All(Uri.IsHexDigit)))
                     throw new InvalidDataException("Invalid file metadata in project.");
             foreach (var entry in data.FileHashCache)
                 if (!InRoots(entry.Key) || entry.Value == null || entry.Value.Length != 64 || !entry.Value.All(Uri.IsHexDigit))
@@ -316,8 +360,10 @@ namespace ClutterFlock.Core
             var hashes = new Dictionary<string, string>(data.FileHashCache, StringComparer.OrdinalIgnoreCase);
             // Integer pairs avoid allocating another pair of full paths per saved match.
             var pairs = new HashSet<(int, int)>();
-            foreach (var match in data.DuplicateFiles)
+            var retained = 0;
+            for (var index = 0; index < data.DuplicateFiles.Count; index++)
             {
+                var match = data.DuplicateFiles[index];
                 if (match == null || !knownFiles.ContainsKey(match.PathA) || !knownFiles.ContainsKey(match.PathB) ||
                     !Path.GetFileName(match.PathA).Equals(Path.GetFileName(match.PathB), StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(Path.GetDirectoryName(match.PathA), Path.GetDirectoryName(match.PathB), StringComparison.OrdinalIgnoreCase))
@@ -329,8 +375,16 @@ namespace ClutterFlock.Core
                 var left = knownFiles[match.PathA];
                 var right = knownFiles[match.PathB];
                 var pair = left < right ? (left, right) : (right, left);
-                if (!pairs.Add(pair)) throw new InvalidDataException("Duplicate analysis result in project.");
+                if (!pairs.Add(pair))
+                {
+                    if (!coalesceRepeatedMatches) throw new InvalidDataException("Duplicate analysis result in project.");
+                    continue;
+                }
+                if (coalesceRepeatedMatches) data.DuplicateFiles[retained] = match;
+                retained++;
             }
+            if (coalesceRepeatedMatches && retained < data.DuplicateFiles.Count)
+                data.DuplicateFiles.RemoveRange(retained, data.DuplicateFiles.Count - retained);
             return knownFiles;
         }
     }

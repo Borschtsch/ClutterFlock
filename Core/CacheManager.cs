@@ -67,6 +67,21 @@ namespace ClutterFlock.Core
             RemoveEntries(path => PathUtilities.IsWithin(path, folderPath));
         }
 
+        public void RemoveFileFromCache(string filePath)
+        {
+            _fileHashCache.TryRemove(filePath, out _);
+            _fileMetadataCache.TryRemove(filePath, out _);
+            var folder = Path.GetDirectoryName(filePath)!;
+            if (!_folderInfoCache.TryGetValue(folder, out var previous)) return;
+            var files = previous.Files.Where(p => !p.Equals(filePath, StringComparison.OrdinalIgnoreCase)).ToList();
+            CacheFolderInfo(folder, new FolderInfo
+            {
+                Files = files,
+                TotalSize = files.Sum(p => GetFileMetadata(p)?.Size ?? 0),
+                LatestModificationDate = files.Select(p => (DateTime?)GetFileMetadata(p)?.LastWriteTime).DefaultIfEmpty().Max()
+            });
+        }
+
         public void RetainFolders(IReadOnlyCollection<string> roots)
         {
             RemoveEntries(path => !roots.Any(root => PathUtilities.IsWithin(path, root)));

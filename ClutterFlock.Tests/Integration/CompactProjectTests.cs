@@ -182,7 +182,10 @@ public sealed class CompactProjectTests
                         case "absolute-folder": folder["path"] = _root; break;
                         case "escaping-folder": folder["path"] = "..\\outside"; break;
                         case "null-files": folder["files"] = null; break;
-                        case "duplicate-folder": json.AsArray().Add(folder.DeepClone()); break;
+                        case "duplicate-folder":
+                            var conflicting = folder.DeepClone();
+                            conflicting["totalSize"] = folder["totalSize"]!.GetValue<long>() + 1;
+                            json.AsArray().Add(conflicting); break;
                         case "escaping-file": files[0]!["name"] = "..\\outside.txt"; break;
                         case "duplicate-file": files.Add(files[0]!.DeepClone()); break;
                         case "partial-metadata": files[0]!.AsObject().Remove("size"); break;
@@ -199,6 +202,127 @@ public sealed class CompactProjectTests
         Assert.HasCount(1, model.FilteredFolderMatches);
         IProjectManager manager = new ProjectManager();
         Assert.IsFalse(manager.IsValidProjectFile(_project));
+    }
+
+    [TestMethod]
+    [DataRow("same-path")]
+    [DataRow("empty-folder")]
+    [DataRow("case-alias")]
+    [DataRow("overlapping-root")]
+    public async Task RepeatedFolderRecords_RestoreOfflinePreserveFileIds_AndResaveOnce(string alias)
+    {
+        using var original = await CreateAnalysisAsync(folders: 3, files: 2);
+        var manager = new ProjectManager();
+        var before = await manager.LoadProjectAsync(_project);
+        AddRepeatedFolder(alias);
+        var savedBytes = await File.ReadAllBytesAsync(_project);
+        Directory.Move(original.ScanFolders.Single(), original.ScanFolders.Single() + "-offline");
+        using var restored = new MainViewModel();
+        Assert.IsTrue(await restored.LoadProjectAsync(_project), restored.StatusMessage);
+        Assert.HasCount(3, restored.FilteredFolderMatches);
+        Assert.IsTrue(restored.FilteredFolderMatches.All(m => m.DuplicateFiles.Count == 2 && m.SimilarityPercentage == 100));
+        Assert.AreEqual(before.SelectedLeftFolder, restored.SelectedFolderMatch!.LeftFolder);
+        Assert.AreEqual(before.SelectedRightFolder, restored.SelectedFolderMatch.RightFolder);
+        CollectionAssert.AreEqual(savedBytes, await File.ReadAllBytesAsync(_project), "Loading must not rewrite the original save.");
+        var migrated = Path.Combine(_root, "coalesced.cfp");
+        Assert.IsTrue(await restored.SaveProjectAsync(migrated), restored.StatusMessage);
+        var after = await manager.LoadProjectAsync(migrated);
+        CollectionAssert.AreEquivalent(before.DuplicateFiles, after.DuplicateFiles);
+        Assert.AreEqual(before.FolderInfoCache.Count, after.FolderInfoCache.Count);
+        Assert.AreEqual(before.FileMetadataCache.Count, after.FileMetadataCache.Count);
+        foreach (var file in before.FileMetadataCache)
+        {
+            Assert.AreEqual(file.Value.Size, after.FileMetadataCache[file.Key].Size);
+            Assert.AreEqual(file.Value.LastWriteTime, after.FileMetadataCache[file.Key].LastWriteTime);
+            Assert.AreEqual(before.FileHashCache[file.Key], after.FileHashCache[file.Key]);
+        }
+    }
+
+    [TestMethod]
+    [DataRow("size")]
+    [DataRow("timestamp")]
+    [DataRow("hash")]
+    [DataRow("file-list")]
+    [DataRow("folder-date")]
+    public async Task RepeatedFolderWithConflictingEvidence_ReportsPathAndRetainsSession(string conflict)
+    {
+        using var model = await CreateAnalysisAsync();
+        var selected = model.SelectedFolderMatch;
+        var path = AddRepeatedFolder("same-path", conflict);
+        var savedBytes = await File.ReadAllBytesAsync(_project);
+        Assert.IsFalse(await model.LoadProjectAsync(_project));
+        StringAssert.Contains(model.StatusMessage, "Conflicting stored");
+        StringAssert.Contains(model.StatusMessage, path);
+        Assert.AreSame(selected, model.SelectedFolderMatch);
+        Assert.HasCount(1, model.FilteredFolderMatches);
+        CollectionAssert.AreEqual(savedBytes, await File.ReadAllBytesAsync(_project));
+    }
+
+    // Rewrite an actual saved container, preserving its ordinal file-ID format.
+    private string AddRepeatedFolder(string alias, string? conflict = null)
+    {
+        using var archive = ZipFile.Open(_project, ZipArchiveMode.Update);
+        JsonNode Read(string name)
+        {
+            using var stream = archive.GetEntry(name)!.Open();
+            return JsonNode.Parse(stream)!;
+        }
+        void Write(string name, JsonNode node)
+        {
+            archive.GetEntry(name)!.Delete();
+            using var stream = archive.CreateEntry(name).Open();
+            using var writer = new StreamWriter(stream, new UTF8Encoding(false));
+            writer.Write(node.ToJsonString());
+        }
+        var header = Read("project.json");
+        var folders = Read("folders.json").AsArray();
+        var folder = folders.First(f => alias == "empty-folder"
+            ? f!["files"]!.AsArray().Count == 0 : f!["files"]!.AsArray().Count > 0)!;
+        var index = folders.IndexOf(folder);
+        var offset = folders.Take(index).Sum(f => f!["files"]!.AsArray().Count);
+        var count = folder["files"]!.AsArray().Count;
+        var fullPath = Path.GetFullPath(Path.Combine(header["scanFolders"]![folder["root"]!.GetValue<int>()]!.GetValue<string>(), folder["path"]!.GetValue<string>()));
+        var copy = folder.DeepClone();
+        if (alias == "case-alias") copy["path"] = folder["path"]!.GetValue<string>().ToUpperInvariant();
+        if (alias == "overlapping-root")
+        {
+            copy["root"] = header["scanFolders"]!.AsArray().Count;
+            header["scanFolders"]!.AsArray().Add(fullPath);
+            copy["path"] = ".";
+        }
+        var file = copy["files"]!.AsArray().FirstOrDefault()!;
+        switch (conflict)
+        {
+            case "size": file["size"] = file["size"]!.GetValue<long>() + 1; break;
+            case "timestamp": file["lastWriteTime"] = DateTime.MinValue; break;
+            case "hash": file["hash"] = new string('0', 64); break;
+            case "file-list": file["name"] = "different-file.txt"; break;
+            case "folder-date": copy["latestModificationDate"] = DateTime.MinValue; break;
+        }
+        // Insert before later records: loaders must retain the repeated occurrence's ID slots.
+        folders.Insert(index + 1, copy);
+        byte[] matches;
+        using (var input = archive.GetEntry("matches.bin")!.Open())
+        using (var output = new MemoryStream()) { input.CopyTo(output); matches = output.ToArray(); }
+        for (var i = 0; i < matches.Length; i += 4)
+        {
+            var id = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(matches.AsSpan(i));
+            if (id >= offset + count) id += count;
+            else if (id >= offset) id += count; // Reference the duplicate occurrence instead of the original.
+            System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(matches.AsSpan(i), id);
+        }
+        var extra = matches[..8].ToArray();
+        for (var i = 0; i < extra.Length; i += 4)
+        {
+            var id = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(extra.AsSpan(i));
+            if (id >= offset + count && id < offset + 2 * count) id -= count;
+            System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(extra.AsSpan(i), id);
+        }
+        archive.GetEntry("matches.bin")!.Delete();
+        using (var output = archive.CreateEntry("matches.bin").Open()) { output.Write(matches); output.Write(extra); }
+        header["matchCount"] = header["matchCount"]!.GetValue<int>() + 1;
+        Write("project.json", header); Write("folders.json", folders);
+        return fullPath;
     }
 
     [TestMethod]

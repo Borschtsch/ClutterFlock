@@ -17,7 +17,7 @@ namespace ClutterFlock.Core
     {
         private readonly ICacheManager _cacheManager;
         private readonly IErrorRecoveryService _errorRecoveryService;
-        private static readonly int MaxParallelism = Math.Max(1, Environment.ProcessorCount - 1);
+        public StorageScheduleSnapshot? LastSchedule { get; private set; }
 
         public FolderScanner(ICacheManager cacheManager, IErrorRecoveryService errorRecoveryService)
         {
@@ -25,119 +25,71 @@ namespace ClutterFlock.Core
             _errorRecoveryService = errorRecoveryService ?? throw new ArgumentNullException(nameof(errorRecoveryService));
         }
 
-        public async Task<List<string>> ScanFolderHierarchyAsync(string rootPath, IProgress<AnalysisProgress>? progress, CancellationToken cancellationToken)
+        public Task<List<string>> ScanFolderHierarchyAsync(string rootPath, IProgress<AnalysisProgress>? progress, CancellationToken cancellationToken)
+            => ScanFoldersAsync([rootPath], progress, cancellationToken);
+
+        public async Task<List<string>> ScanFoldersAsync(IReadOnlyList<string> roots, IProgress<AnalysisProgress>? progress,
+            CancellationToken cancellationToken, StorageTopology? topology = null)
         {
-            if (rootPath == null) throw new ArgumentNullException(nameof(rootPath));
-            if (string.IsNullOrWhiteSpace(rootPath)) throw new ArgumentException("Path cannot be empty or whitespace.", nameof(rootPath));
-            if (!Directory.Exists(rootPath)) throw new DirectoryNotFoundException($"Directory not found: {rootPath}");
-
-            var subfolders = new List<string>();
-            var stack = new Stack<string>();
-            stack.Push(rootPath);
-
-            // Phase 1: Count all subfolders with immediate progress reporting
-            progress?.Report(new AnalysisProgress 
-            { 
-                Phase = AnalysisPhase.CountingFolders, 
-                StatusMessage = "Counting subfolders...", 
-                IsIndeterminate = true 
-            });
-
-            await Task.Run(() =>
+            foreach (var root in roots)
             {
-                while (stack.Count > 0 && !cancellationToken.IsCancellationRequested)
+                ArgumentException.ThrowIfNullOrWhiteSpace(root);
+                if (!Directory.Exists(root)) throw new DirectoryNotFoundException($"Directory not found: {root}");
+            }
+            topology ??= StorageTopology.Discover(roots);
+            var scheduler = new AdaptiveStorageScheduler(topology.Devices, availableProcessors: topology.AvailableProcessors);
+            var discovered = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
+            var completed = 0;
+            void Queue(string path)
+            {
+                path = PathUtilities.Normalize(path);
+                if (!discovered.TryAdd(path, 0)) return;
+                scheduler.Enqueue(topology.Resolve(path), async (work, token) =>
                 {
-                    var current = stack.Pop();
-                    subfolders.Add(current);
-
+                    // Discover children and scan metadata in the same pass. All roots enter the
+                    // device queues together; a slow root cannot prevent another disk starting.
                     try
                     {
-                        foreach (var dir in Directory.GetDirectories(current))
+                        foreach (var child in new DirectoryInfo(path).EnumerateDirectories())
                         {
-                            if (cancellationToken.IsCancellationRequested) break;
-                            if ((File.GetAttributes(dir) & FileAttributes.ReparsePoint) == 0)
-                                stack.Push(dir);
-                        }
-
-                        // Report progress more frequently for better user feedback
-                        if (subfolders.Count % 100 == 0 || subfolders.Count == 1)
-                        {
-                            progress?.Report(new AnalysisProgress
-                            {
-                                Phase = AnalysisPhase.CountingFolders,
-                                StatusMessage = $"Found {subfolders.Count} subfolders...",
-                                IsIndeterminate = true
-                            });
+                            token.ThrowIfCancellationRequested();
+                            if ((child.Attributes & FileAttributes.ReparsePoint) == 0) Queue(child.FullName);
+                            work.Report(1);
                         }
                     }
-                    catch (UnauthorizedAccessException)
-                    {
-                        _errorRecoveryService.LogSkippedItem(current, "Access denied");
-                        continue;
-                    }
-                    catch (DirectoryNotFoundException)
-                    {
-                        _errorRecoveryService.LogSkippedItem(current, "Directory not found");
-                        continue;
-                    }
-                    catch (IOException ex)
-                    {
-                        _errorRecoveryService.LogSkippedItem(current, $"IO error: {ex.Message}");
-                        continue;
-                    }
-                }
-            }, cancellationToken);
-
-            cancellationToken.ThrowIfCancellationRequested();
-
-            // Phase 2: Scan folders that haven't been cached
-            var foldersToScan = subfolders.Where(folder => !_cacheManager.IsFolderCached(folder)).ToList();
-            
-            if (foldersToScan.Count == 0)
-            {
-                progress?.Report(new AnalysisProgress
-                {
-                    Phase = AnalysisPhase.Complete,
-                    StatusMessage = "All folders already scanned",
-                    CurrentProgress = subfolders.Count,
-                    MaxProgress = subfolders.Count
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    { _errorRecoveryService.LogSkippedItem(path, ex.Message); }
+                    if (!_cacheManager.IsFolderCached(path))
+                        _cacheManager.CacheFolderInfo(path, await AnalyzeFolderCoreAsync(path, token, work.Report).ConfigureAwait(false));
+                    work.Report(1); Interlocked.Increment(ref completed);
                 });
-                return subfolders;
             }
-
-            progress?.Report(new AnalysisProgress
+            foreach (var root in roots) Queue(root);
+            void Report(StorageScheduleSnapshot state)
             {
-                Phase = AnalysisPhase.ScanningFolders,
-                StatusMessage = $"Scanning {foldersToScan.Count} new folders...",
-                CurrentProgress = 0,
-                MaxProgress = foldersToScan.Count
-            });
-
-            // Use Parallel.ForEachAsync to control parallelism.
-            int scannedCount = 0;
-            // Process folders in parallel with controlled concurrency.
-            await Parallel.ForEachAsync(foldersToScan, new ParallelOptions
-            {
-                MaxDegreeOfParallelism = MaxParallelism,
-                CancellationToken = cancellationToken
-            }, async (folder, token) =>
-            {
-                var folderInfo = await AnalyzeFolderAsync(folder, token);
-                _cacheManager.CacheFolderInfo(folder, folderInfo);
-                var current = Interlocked.Increment(ref scannedCount);
-                progress?.Report(new AnalysisProgress
-                {
-                    Phase = AnalysisPhase.ScanningFolders,
-                    StatusMessage = $"Scanning folders: {current}/{foldersToScan.Count}",
-                    CurrentProgress = current,
-                    MaxProgress = foldersToScan.Count
-                });
-            });
-
-            return subfolders;
+                LastSchedule = state;
+                progress?.Report(new AnalysisProgress { Phase = AnalysisPhase.ScanningFolders,
+                    CurrentProgress = Volatile.Read(ref completed), MaxProgress = discovered.Count, IsIndeterminate = true,
+                    StatusMessage = $"Scanning folders: {Volatile.Read(ref completed):N0}/{discovered.Count:N0} discovered · " +
+                        $"{state.Devices.Sum(d => d.UnitsPerSecond):N0} entries/s · {state.Summary}" });
+            }
+            Report(scheduler.Snapshot);
+            await scheduler.RunAsync(cancellationToken, Report).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            return discovered.Keys.ToList();
         }
 
-        public async Task<FolderInfo> AnalyzeFolderAsync(string folderPath, CancellationToken cancellationToken)
+        // Historical two-pass scanning annotations; discovery and metadata now share adaptive queues.
+            // Phase 1: Count all subfolders with immediate progress reporting
+                        // Report progress more frequently for better user feedback
+            // Phase 2: Scan folders that haven't been cached
+            // Use Parallel.ForEachAsync to control parallelism.
+            // Process folders in parallel with controlled concurrency.
+
+        public Task<FolderInfo> AnalyzeFolderAsync(string folderPath, CancellationToken cancellationToken)
+            => AnalyzeFolderCoreAsync(folderPath, cancellationToken, null);
+
+        private async Task<FolderInfo> AnalyzeFolderCoreAsync(string folderPath, CancellationToken cancellationToken, Action<long>? report)
         {
             if (folderPath == null) throw new ArgumentNullException(nameof(folderPath));
             if (string.IsNullOrWhiteSpace(folderPath)) throw new ArgumentException("Path cannot be empty or whitespace.", nameof(folderPath));
@@ -149,12 +101,13 @@ namespace ClutterFlock.Core
                 try
                 {
                     // Cache individual file metadata to avoid future file system access.
-                    foreach (var file in Directory.EnumerateFiles(folderPath))
+                    foreach (var info in new DirectoryInfo(folderPath).EnumerateFiles())
                     {
+                        var file = info.FullName;
                         cancellationToken.ThrowIfCancellationRequested();
                         try
                         {
-                            var info = new FileInfo(file);
+                            // Enumeration already supplies size and timestamps; avoid a second disk lookup.
                             var metadata = new FileMetadata
                             {
                                 FileName = info.Name,
@@ -162,6 +115,7 @@ namespace ClutterFlock.Core
                                 LastWriteTime = info.LastWriteTime
                             };
                             _cacheManager.CacheFileMetadata(file, metadata);
+                            report?.Invoke(1);
                             result.Files.Add(file);
                             result.TotalSize += metadata.Size;
                             if (result.LatestModificationDate == null || metadata.LastWriteTime > result.LatestModificationDate)
