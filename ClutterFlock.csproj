@@ -21,6 +21,7 @@
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     
     <!-- MinVer Configuration for automatic versioning -->
+    <MinVerSkip>true</MinVerSkip>
     <MinVerDefaultPreReleaseIdentifiers>dev</MinVerDefaultPreReleaseIdentifiers>
     <MinVerTagPrefix>v</MinVerTagPrefix>
     <MinVerVerbosity>normal</MinVerVerbosity>
@@ -31,6 +32,7 @@
     <AssemblyProduct>ClutterFlock</AssemblyProduct>
     <AssemblyCompany>ClutterFlock Team</AssemblyCompany>
     <AssemblyCopyright>© 2024 ClutterFlock Team</AssemblyCopyright>
+    <Version>1.5.1</Version>
   </PropertyGroup>
 
   <ItemGroup>

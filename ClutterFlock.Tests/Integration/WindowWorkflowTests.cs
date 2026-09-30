@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Windows.Controls;
 using ClutterFlock.ViewModels;
 
@@ -22,6 +23,9 @@ public sealed class WindowWorkflowTests
         window.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
         try
         {
+            var productVersion = typeof(MainWindow).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()!.InformationalVersion.Split('+')[0];
+            var versionSuffix = $" — ClutterFlock v{productVersion}";
+            Assert.AreEqual("Untitled workspace" + versionSuffix, window.Title);
             using (var original = new MainViewModel { MinimumSizeMB = 0, MinimumSimilarity = 75, ShowUniqueFiles = true })
             {
                 Assert.IsTrue(await original.AddFolderAsync(root));
@@ -31,6 +35,7 @@ public sealed class WindowWorkflowTests
             }
             var model = (MainViewModel)window.DataContext;
             Assert.IsTrue(await model.LoadProjectAsync(project), model.StatusMessage);
+            Assert.AreEqual("project" + versionSuffix, window.Title);
             Assert.AreEqual("75", ((TextBox)window.FindName("txtMinSimilarity")).Text);
             Assert.AreEqual("0", ((TextBox)window.FindName("txtMinSize")).Text);
             Assert.AreEqual("All", ((ComboBox)window.FindName("fileView")).SelectedItem);
@@ -69,6 +74,11 @@ public sealed class WindowWorkflowTests
             var deadline = DateTime.UtcNow.AddSeconds(5);
             while (model.IsPopulatingResults && DateTime.UtcNow < deadline) await Task.Delay(10);
             Assert.IsTrue(((Button)window.FindName("btnRemoveFolder")).IsEnabled);
+            Assert.AreEqual(model.ProjectTitle + versionSuffix, window.Title);
+            Assert.IsTrue(await model.SaveProjectAsync(project), model.StatusMessage);
+            Assert.AreEqual("project" + versionSuffix, window.Title);
+            model.NewProject();
+            Assert.AreEqual("Untitled workspace" + versionSuffix, window.Title);
         }
         finally
         {

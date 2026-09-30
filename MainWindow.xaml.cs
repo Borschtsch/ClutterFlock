@@ -7,6 +7,7 @@
 using System;
 using System.ComponentModel;
 using System.Linq;
+using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
@@ -17,6 +18,8 @@ namespace ClutterFlock
 {
     public partial class MainWindow : Window
     {
+        private static readonly string ProductVersion = typeof(MainWindow).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0] ?? "unknown";
         private MainViewModel _viewModel;
         private CollectionViewSource _folderMatchesViewSource;
         private CollectionViewSource _fileDetailsViewSource;
@@ -28,8 +31,7 @@ namespace ClutterFlock
             DataContext = _viewModel;
             
             // Set window title with version information
-            var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
-            this.Title = $"ClutterFlock v{version?.Major}.{version?.Minor}.{version?.Build}";
+            UpdateWindowTitle();
             
             // Set up collection view sources for advanced sorting
             _folderMatchesViewSource = new CollectionViewSource { Source = _viewModel.FilteredFolderMatches };
@@ -52,6 +54,9 @@ namespace ClutterFlock
             this.Closing += MainWindow_Closing;
             ConfigureWorkspaceCommands();
         }
+
+        private void UpdateWindowTitle()
+            => Title = $"{_viewModel.ProjectTitle} — ClutterFlock v{ProductVersion}";
 
         private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
         {
@@ -117,7 +122,7 @@ namespace ClutterFlock
                     txtMinSize.Text = _viewModel.MinimumSizeMB.ToString();
                     break;
                 case nameof(MainViewModel.ProjectTitle):
-                    Title = $"{_viewModel.ProjectTitle} — ClutterFlock";
+                    UpdateWindowTitle();
                     break;
                 case nameof(MainViewModel.ProjectPath):
                     comparisonsColumn.Width = new GridLength(Math.Clamp(_viewModel.ComparisonsWidth, 380, Math.Max(380, ActualWidth - 430)));

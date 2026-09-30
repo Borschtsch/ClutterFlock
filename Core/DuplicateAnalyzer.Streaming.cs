@@ -28,7 +28,7 @@ public partial class DuplicateAnalyzer
         void Report() => progress?.Report(new AnalysisProgress
         {
             Phase = AnalysisPhase.ComparingFiles, CurrentProgress = Volatile.Read(ref completedFiles), MaxProgress = totalFiles,
-            StatusMessage = $"Verifying contents: {Volatile.Read(ref completedFiles):N0}/{totalFiles:N0} files · {stats.BytesRead / 1048576.0:N1} MiB read · {stats.BytesRead / 1048576.0 / Math.Max(.001, clock.Elapsed.TotalSeconds):N1} MiB/s · {stats.FilePairsEmitted:N0} verified file pairs · {stats.FullHashesComputed:N0} full hashes · {stats.FilesRejectedBySample:N0} sample exclusions · {stats.CachedHashesUsed:N0} cached · {stats.StorageSchedule?.Summary}"
+            StatusMessage = $"Verifying contents: {Volatile.Read(ref completedFiles):N0}/{totalFiles:N0} files · {stats.BytesRead / 1048576.0 / Math.Max(.001, clock.Elapsed.TotalSeconds):N1} MiB/s"
         });
         using var reportingStop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         async Task ReportPeriodically()

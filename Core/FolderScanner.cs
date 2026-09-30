@@ -71,7 +71,7 @@ namespace ClutterFlock.Core
                 progress?.Report(new AnalysisProgress { Phase = AnalysisPhase.ScanningFolders,
                     CurrentProgress = Volatile.Read(ref completed), MaxProgress = discovered.Count, IsIndeterminate = true,
                     StatusMessage = $"Scanning folders: {Volatile.Read(ref completed):N0}/{discovered.Count:N0} discovered · " +
-                        $"{state.Devices.Sum(d => d.UnitsPerSecond):N0} entries/s · {state.Summary}" });
+                        $"{state.Devices.Sum(d => d.UnitsPerSecond):N0} entries/s" });
             }
             Report(scheduler.Snapshot);
             await scheduler.RunAsync(cancellationToken, Report).ConfigureAwait(false);
