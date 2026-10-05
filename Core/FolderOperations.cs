@@ -33,7 +33,7 @@ public sealed class FolderOperationPlan
 }
 
 /// <summary>Real filesystem operations, independent of saved analysis evidence.</summary>
-public sealed class FolderOperations
+public sealed partial class FolderOperations
 {
     public Task<FolderOperationPlan> PrepareAsync(FolderAction action, string a, string b, CancellationToken token = default) => Task.Run(() =>
     {
@@ -109,6 +109,7 @@ public sealed class FolderOperations
         path = PathUtilities.Normalize(path);
         await Task.Run(() =>
         {
+            EnsureLeaf(Path.GetDirectoryName(path)!);
             CheckPath(path);
             if (!File.Exists(path)) throw new FileNotFoundException("File unavailable.", path);
             File.Delete(path);

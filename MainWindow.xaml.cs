@@ -90,6 +90,8 @@ namespace ClutterFlock
             _viewModel.CancelOperation();
             _viewModel.PropertyChanged -= ViewModel_PropertyChanged;
             _searchTimer.Stop();
+            imagePreview.Clear();
+            _imageComparisonWindow?.Close();
             _viewModel.Dispose();
         }
 

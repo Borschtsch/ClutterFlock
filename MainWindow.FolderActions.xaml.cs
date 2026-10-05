@@ -39,6 +39,7 @@ public partial class MainWindow
         var row = listViewFiles.SelectedItem as FileDetailInfo;
         btnOpenFileA.IsEnabled = btnDeleteFileA.IsEnabled = row?.HasLeftFile == true;
         btnOpenFileB.IsEnabled = btnDeleteFileB.IsEnabled = row?.HasRightFile == true;
+        UpdateImagePreview(row);
     }
 
     private async void FileAction_Click(object sender, RoutedEventArgs e)
@@ -64,7 +65,7 @@ public partial class MainWindow
     {
         if (!_viewModel.CanManageFolders) return false;
         var confirmation = new ActionConfirmationWindow("Delete file permanently",
-            $"Permanently delete this file:\n\n{path}\n\nOnly this file will be deleted. The other copy is kept. This bypasses the Recycle Bin and cannot be undone.",
+            $"Permanently delete this file:\n\n{path}\n\nOnly this file will be deleted. All other files are kept. This bypasses the Recycle Bin and cannot be undone.",
             "Permanently delete file", (Style)FindResource("DangerButton")) { Owner = owner };
         if (confirmation.ShowDialog() != true) return false;
         return await _viewModel.DeleteFileAsync(path);

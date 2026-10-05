@@ -77,7 +77,7 @@ public sealed class StreamingAnalysisTests
             (batch, _) => { Interlocked.CompareExchange(ref firstAt, clock.ElapsedMilliseconds, -1); foreach (var match in batch) streamed.Add(match); return Task.CompletedTask; });
         Assert.HasCount(1800, result); Assert.HasCount(result.Count, streamed);
         CollectionAssert.AreEquivalent(result, streamed.ToList()); Assert.HasCount(result.Count, result.Distinct().ToList());
-        Assert.IsTrue(updates.Any(p => p.StatusMessage.Contains("MiB read") && p.StatusMessage.Contains("MiB/s")));
+        Assert.IsTrue(updates.Any(p => p.StatusMessage.StartsWith("Verifying contents:") && p.StatusMessage.Contains("files ·") && p.StatusMessage.Contains("MiB/s")));
         Assert.IsFalse(scan.Errors.GetErrorSummary().HasErrors);
         TestContext.WriteLine($"STREAM: {result.Count} verified pairs; first batch {firstAt} ms; completed {clock.ElapsedMilliseconds} ms. Synthetic 720-file fixture, OS caches/hardware affect timings.");
     }

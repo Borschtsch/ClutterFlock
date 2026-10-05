@@ -616,6 +616,8 @@ namespace ClutterFlock.ViewModels
             }
         }
 
+        public IReadOnlyList<FileDetailInfo> GetFileComparisonSnapshot() => _allFileDetails.ToArray();
+
         private void FilterFileDetails()
         {
             FileDetails.Clear();
