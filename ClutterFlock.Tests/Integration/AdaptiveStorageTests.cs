@@ -174,6 +174,7 @@ public sealed class AdaptiveStorageTests
     }
 
     [TestMethod]
+    [DoNotParallelize]
     public async Task MovingWindows_GrowFastDevice_BackOffSerializedDevice_AndRespectBudget()
     {
         var fast = new StorageDevice("fast", "Fast", true);
@@ -181,7 +182,12 @@ public sealed class AdaptiveStorageTests
         var scheduler = new AdaptiveStorageScheduler([fast, serialized], 6, TimeSpan.FromMilliseconds(75), 4, availableProcessors: 7);
         var snapshots = new List<StorageScheduleSnapshot>();
         using var serialStorage = new SemaphoreSlim(1);
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var serialContenders = 0;
         // Component boundary: real reads with controlled storage latency, no mocked services.
+        // Give competing requests a clear saturation penalty. A flat 35 ms service time
+        // can appear to improve by 5% from timer quantization alone in a 300 ms window.
+        // Count actual outstanding requests, independently of scheduler allocations.
         for (var i = 0; i < 320; i++) scheduler.Enqueue(fast, async (work, token) =>
         {
             await Task.Delay(25, token);
@@ -189,24 +195,35 @@ public sealed class AdaptiveStorageTests
         });
         for (var i = 0; i < 160; i++) scheduler.Enqueue(serialized, async (work, token) =>
         {
-            await serialStorage.WaitAsync(token);
+            Interlocked.Increment(ref serialContenders);
             try
             {
-                await Task.Delay(35, token);
-                var data = await File.ReadAllBytesAsync(_file, token);
-                work.Report(data.Length / 8);
+                await serialStorage.WaitAsync(token);
+                try
+                {
+                    await Task.Delay(Volatile.Read(ref serialContenders) > 1 ? 140 : 35, token);
+                    var data = await File.ReadAllBytesAsync(_file, token);
+                    work.Report(data.Length / 8);
+                }
+                finally { serialStorage.Release(); }
             }
-            finally { serialStorage.Release(); }
+            finally { Interlocked.Decrement(ref serialContenders); }
         });
-        await scheduler.RunAsync(CancellationToken.None, snapshots.Add).WaitAsync(TimeSpan.FromSeconds(20));
+        await scheduler.RunAsync(stop.Token, snapshots.Add);
+        var trace = string.Join(Environment.NewLine, snapshots.Select((s, i) =>
+            $"Window {i}: " + string.Join("; ", s.Devices.Select(d =>
+                $"{d.Device}: allocated={d.Workers}, active={d.Active}, queued={d.Queued}, rate={d.UnitsPerSecond:F1}"))));
         var fastPeak = snapshots.Max(s => s.Devices.Single(d => d.Device == "Fast").Workers);
-        Assert.IsGreaterThan(1, fastPeak);
+        Assert.IsGreaterThan(1, fastPeak, "The fast device must grow.\n" + trace);
         var slow = snapshots.Select(s => s.Devices.Single(d => d.Device == "Serialized")).ToList();
         var trial = slow.FindIndex(s => s.Workers > 1);
-        Assert.IsGreaterThanOrEqualTo(0, trial, "Every device needs an opportunity to probe additional workers.");
-        Assert.IsTrue(slow.Skip(trial + 1).Any(s => s.Workers == 1 && s.Queued > 0), "No throughput gain must reduce concurrency while work remains.");
-        Assert.IsTrue(snapshots.All(s => s.Devices.Sum(d => d.Active) <= 6 && s.Devices.Sum(d => d.Workers) <= 6));
-        Assert.IsTrue(snapshots.All(s => s.Devices.All(d => d.Workers >= 1)));
+        Assert.IsGreaterThanOrEqualTo(0, trial, "Every device needs an opportunity to probe additional workers.\n" + trace);
+        Assert.IsTrue(slow.Skip(trial + 1).Any(s => s.Workers == 1 && s.Queued > 0), "No throughput gain must reduce concurrency while work remains.\n" + trace);
+        Assert.IsTrue(snapshots.All(s => s.Devices.Sum(d => d.Active) <= 6 && s.Devices.Sum(d => d.Workers) <= 6),
+            "Running and allocated subworkers must stay within the shared budget.\n" + trace);
+        Assert.IsTrue(snapshots.All(s => s.Devices.All(d => d.Workers >= 1)),
+            "Each storage device must retain at least one subworker.\n" + trace);
+        Assert.AreEqual(0, serialContenders, "Every serialized request must drain before the test returns.");
         TestContext.WriteLine($"Fast-device peak: {fastPeak} workers; serialized device returned to one; {snapshots.Count} measured windows.");
     }
 
