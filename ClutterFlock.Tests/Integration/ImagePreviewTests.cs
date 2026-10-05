@@ -122,7 +122,7 @@ public sealed class ImagePreviewTests
             list.SelectedItem = row;
             var first = preview.Loading;
             list.SelectedItem = text;
-            await first;
+            await PumpUntilComplete(window, first);
             Assert.AreEqual(Visibility.Collapsed, ((FrameworkElement)window.FindName("imagePreviewPanel")).Visibility);
             Assert.IsNull(((Image)preview.FindName("leftImage")).Source);
             preview.ShowFiles(a, b, 480, 0);
@@ -131,7 +131,14 @@ public sealed class ImagePreviewTests
             await PumpUntilComplete(window, Task.WhenAll(superseded, preview.Loading));
             Assert.AreEqual(200, ((BitmapSource)((Image)preview.FindName("leftImage")).Source).PixelWidth);
             Assert.IsNull(((Image)preview.FindName("rightImage")).Source);
-            list.SelectedItem = row; await preview.Loading;
+            // Start selection under WPF's synchronization context, as a real UI event does.
+            // A plain await here can deadlock because MSTest does not pump this dispatcher.
+            window.Dispatcher.Invoke(() =>
+            {
+                Assert.IsInstanceOfType<DispatcherSynchronizationContext>(SynchronizationContext.Current);
+                list.SelectedItem = row;
+            }, DispatcherPriority.Normal);
+            await PumpUntilComplete(window, preview.Loading);
             Assert.IsNotNull(((Image)preview.FindName("leftImage")).Source);
             Assert.IsNotNull(((Image)preview.FindName("rightImage")).Source);
             LayoutContent(window, viewport); list.ScrollIntoView(row);
@@ -146,7 +153,7 @@ public sealed class ImagePreviewTests
             item.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left) { RoutedEvent = Control.MouseDoubleClickEvent });
             var popup = window.OwnedWindows.OfType<ImageComparisonWindow>().Single();
             window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
-            await popup.Preview.Loading;
+            await PumpUntilComplete(popup, popup.Preview.Loading);
             Assert.IsNotNull(((Image)popup.Preview.FindName("leftImage")).Source);
             Assert.IsNotNull(((Image)popup.Preview.FindName("rightImage")).Source);
             Assert.IsTrue(((BitmapSource)((Image)popup.Preview.FindName("leftImage")).Source).PixelWidth >
@@ -154,7 +161,7 @@ public sealed class ImagePreviewTests
             Render(window, "image-preview.png", viewport); Render(popup, "image-comparison.png");
             popup.Close();
             var onlyA = new FileDetailInfo { LeftFileName = "A.png", LeftFullPath = a };
-            model.FileDetails.Add(onlyA); list.SelectedItem = onlyA; await preview.Loading;
+            model.FileDetails.Add(onlyA); list.SelectedItem = onlyA; await PumpUntilComplete(window, preview.Loading);
             StringAssert.Contains(((TextBlock)preview.FindName("rightMessage")).Text, "No file");
             // Enter and the visible enlarge button reach the same viewer without opening an external app.
             ((Button)window.FindName("btnEnlargeImage")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));

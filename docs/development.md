@@ -20,6 +20,11 @@ Tests exercise real files, the public service interfaces, the application workfl
 and the WPF window on an STA thread. There are no isolated unit tests or mock service
 implementations. Each run produces TRX and Cobertura reports in
 `ClutterFlock.Tests/TestResults`; CI retains the 75% line / 60% branch coverage gate.
+The script streams individual test results and saves runner diagnostics in each run's
+subfolder. It kills its own test process tree after 180 seconds if the runner cannot
+exit (override with `-TimeoutSeconds`). Both CI test steps also have a five-minute
+limit, and upload the diagnostic folders even after failure. A hard timeout exits
+with code 124; incomplete runs do not pass the coverage gate.
 
 ## Workspace workflow
 

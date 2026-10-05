@@ -40,6 +40,7 @@ jobs:
       shell: pwsh
       
     - name: Run tests with coverage
+      timeout-minutes: 5
       run: |
         pwsh -NoProfile -File scripts/test-integration.ps1 -NoBuild
       shell: pwsh
@@ -93,7 +94,7 @@ jobs:
         name: coverage-report
         path: |
           coverage-report/
-          ClutterFlock.Tests/TestResults/coverage.cobertura.xml
+          ClutterFlock.Tests/TestResults/
         retention-days: 30
         
     - name: Comment coverage on PR
