@@ -101,10 +101,15 @@ public sealed class ImagePreviewTests
     }
 
     [STATestMethod(UseSTASynchronizationContext = true)]
-    public async Task Selection_ReplacesStalePreviews_AndDoubleClickOpensSideBySideWindow()
+    [DataRow(960.0)]
+    [DataRow(720.0)]
+    public async Task Selection_ReplacesStalePreviews_AndDoubleClickOpensSideBySideWindow(double hostHeight)
     {
         var a = WriteImage("A.png"); var b = WriteImage("B.jpg", 600, 900, 6);
-        var window = new MainWindow { ShowInTaskbar = false, Left = -10000, Top = -10000 };
+        // Exercise a normal and a constrained native host. The component layout assertion
+        // uses a fixed client viewport, independent of the CI desktop's resolution/DPI.
+        var viewport = new Size(1480, 900);
+        var window = new MainWindow { Height = hostHeight, ShowInTaskbar = false, Left = -10000, Top = -10000 };
         window.Show(); window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
         try
         {
@@ -129,10 +134,13 @@ public sealed class ImagePreviewTests
             list.SelectedItem = row; await preview.Loading;
             Assert.IsNotNull(((Image)preview.FindName("leftImage")).Source);
             Assert.IsNotNull(((Image)preview.FindName("rightImage")).Source);
-            window.UpdateLayout(); list.ScrollIntoView(row);
+            LayoutContent(window, viewport); list.ScrollIntoView(row);
             window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+            LayoutContent(window, viewport);
+            Assert.AreEqual(viewport, ((FrameworkElement)window.Content).RenderSize);
+            Assert.AreEqual(Visibility.Visible, ((FrameworkElement)window.FindName("imagePreviewPanel")).Visibility);
             Assert.IsGreaterThanOrEqualTo(55.0, ((Image)preview.FindName("leftImage")).ActualHeight,
-                "The inline image needs usable space beneath its caption.");
+                $"The inline image needs usable space beneath its caption. Host: {window.ActualWidth} × {window.ActualHeight}; content: {((FrameworkElement)window.Content).ActualWidth} × {((FrameworkElement)window.Content).ActualHeight}; preview: {preview.ActualWidth} × {preview.ActualHeight}.");
             var item = (ListViewItem)list.ItemContainerGenerator.ContainerFromItem(row);
             Assert.IsNotNull(item);
             item.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left) { RoutedEvent = Control.MouseDoubleClickEvent });
@@ -143,7 +151,7 @@ public sealed class ImagePreviewTests
             Assert.IsNotNull(((Image)popup.Preview.FindName("rightImage")).Source);
             Assert.IsTrue(((BitmapSource)((Image)popup.Preview.FindName("leftImage")).Source).PixelWidth >
                 ((BitmapSource)((Image)preview.FindName("leftImage")).Source).PixelWidth);
-            Render(window, "image-preview.png"); Render(popup, "image-comparison.png");
+            Render(window, "image-preview.png", viewport); Render(popup, "image-comparison.png");
             popup.Close();
             var onlyA = new FileDetailInfo { LeftFileName = "A.png", LeftFullPath = a };
             model.FileDetails.Add(onlyA); list.SelectedItem = onlyA; await preview.Loading;
@@ -319,9 +327,24 @@ public sealed class ImagePreviewTests
         finally { timer.Stop(); }
     }
 
-    private static void Render(Window window, string name)
+    private static void LayoutContent(Window window, Size viewport)
     {
-        window.UpdateLayout();
+        // UpdateLayout alone uses the native host's client size, which Windows can clamp
+        // on a hosted runner. Measure the real content tree at the intended test viewport.
+        var content = (FrameworkElement)window.Content;
+        content.Width = viewport.Width;
+        content.Height = viewport.Height;
+        content.Measure(viewport);
+        content.Arrange(new Rect(viewport));
+        // Do not run the host's layout pass here: it would restore the constrained
+        // native arrange slot and clip this reference viewport before inspection.
+
+    }
+
+    private static void Render(Window window, string name, Size? viewport = null)
+    {
+        if (viewport is { } size) LayoutContent(window, size);
+        else window.UpdateLayout();
         var content = (FrameworkElement)window.Content;
         var bitmap = new RenderTargetBitmap((int)Math.Ceiling(content.ActualWidth), (int)Math.Ceiling(content.ActualHeight), 96, 96, PixelFormats.Pbgra32);
         var drawing = new DrawingVisual();
